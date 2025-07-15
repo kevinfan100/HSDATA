@@ -301,14 +301,19 @@ def plot_interactive_bode(results):
         template="plotly_white"
     )
     
-    # 嘗試顯示圖表，如果失敗則保存為HTML檔案
+    # 嘗試在瀏覽器中顯示圖表
     try:
+        print("   🌐 在瀏覽器中顯示互動式圖表")
         fig.show()
     except Exception as e:
-        print(f"   ⚠ 無法顯示互動式圖表: {str(e)}")
-        print("   💾 保存為HTML檔案: bode_plot.html")
-        fig.write_html("bode_plot.html")
-        print("   📖 請在瀏覽器中打開 bode_plot.html 查看互動式圖表")
+        print(f"   ⚠ 無法在瀏覽器中顯示: {str(e)}")
+        print("   📊 使用matplotlib版本顯示")
+        plot_matplotlib_bode(results)
+        return
+    
+    # 同時顯示matplotlib版本
+    print("   📊 同時顯示matplotlib版本")
+    plot_matplotlib_bode(results)
 
 def plot_matplotlib_bode(results):
     """使用matplotlib繪製波德圖（備用方案）"""
