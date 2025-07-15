@@ -1,0 +1,4 @@
+numpy
+matplotlib
+scipy
+plotly>=5.0.0 
