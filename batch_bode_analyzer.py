@@ -191,6 +191,9 @@ def batch_bode_analysis(data_folder="0715_ndc_data"):
     results = {f'VM{i}': {'freqs': [], 'magnitudes': [], 'phases': []} 
                for i in range(6)}
     
+    # 記錄每個頻率對應的輸入通道
+    input_channel_mapping = {}
+    
     # 獲取所有.dat檔案
     dat_files = [f for f in os.listdir(data_folder) if f.endswith('.dat')]
     dat_files.sort(key=lambda x: extract_frequency_from_filename(x))
@@ -214,6 +217,9 @@ def batch_bode_analysis(data_folder="0715_ndc_data"):
             input_channel = auto_detect_input_channel(records, freq, 100000)
             print(f"   檢測到輸入通道: VD{input_channel}")
             
+            # 記錄輸入通道對應關係
+            input_channel_mapping[freq] = input_channel
+            
             # 驗證數據品質
             if validate_data_quality(records, input_channel, freq):
                 # 執行Bode分析
@@ -236,9 +242,9 @@ def batch_bode_analysis(data_folder="0715_ndc_data"):
     print(f"\n批量分析完成")
     print(f"   成功處理: {success_count}/{len(dat_files)} 檔案")
     
-    return results
+    return results, input_channel_mapping
 
-def plot_bode_diagram(results):
+def plot_bode_diagram(results, input_channel_mapping=None):
     """繪製波德圖"""
     # 創建雙子圖佈局
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
@@ -247,15 +253,33 @@ def plot_bode_diagram(results):
     
     for i, (channel, data) in enumerate(results.items()):
         if len(data['freqs']) > 0:
-            # 幅度響應
+            # 幅度響應 - 顯示所有通道
             ax1.semilogx(data['freqs'], data['magnitudes'], 
                         color=colors[i], linewidth=2, marker='o', 
                         markersize=4, label=f'CH{i+1}')
             
-            # 相位響應
-            ax2.semilogx(data['freqs'], data['phases'], 
-                        color=colors[i], linewidth=2, marker='o', 
-                        markersize=4, label=f'CH{i+1}')
+            # 相位響應 - 只顯示對應的輸入通道
+            if input_channel_mapping is not None:
+                # 檢查這個VM通道是否對應任何輸入頻率
+                corresponding_freqs = []
+                corresponding_phases = []
+                
+                for freq, input_ch in input_channel_mapping.items():
+                    if input_ch == i:  # VM通道i對應VD通道i
+                        if freq in data['freqs']:
+                            freq_idx = data['freqs'].index(freq)
+                            corresponding_freqs.append(freq)
+                            corresponding_phases.append(data['phases'][freq_idx])
+                
+                if corresponding_freqs:
+                    ax2.semilogx(corresponding_freqs, corresponding_phases, 
+                                color=colors[i], linewidth=2, marker='o', 
+                                markersize=4, label=f'CH{i+1} (VD{i})')
+            else:
+                # 如果沒有輸入通道映射，顯示所有通道（原始行為）
+                ax2.semilogx(data['freqs'], data['phases'], 
+                            color=colors[i], linewidth=2, marker='o', 
+                            markersize=4, label=f'CH{i+1}')
     
     ax1.set_title('Magnitude Response')
     ax1.set_ylabel('Magnitude (linear)')
@@ -263,7 +287,7 @@ def plot_bode_diagram(results):
     ax1.grid(True, which="both", ls="-", alpha=0.2)
     ax1.legend()
     
-    ax2.set_title('Phase Response')
+    ax2.set_title('Phase Response (VD Input → VM Output)')
     ax2.set_xlabel('Frequency (Hz)')
     ax2.set_ylabel('Phase (deg)')
     ax2.grid(True, which="both", ls="-", alpha=0.2)
@@ -283,7 +307,7 @@ def main():
         return
     
     # 執行批量分析
-    results = batch_bode_analysis("0715_ndc_data")
+    results, input_channel_mapping = batch_bode_analysis("0715_ndc_data")
     
     # 檢查是否有有效結果
     valid_channels = [ch for ch, data in results.items() if len(data['freqs']) > 0]
@@ -291,7 +315,8 @@ def main():
     if valid_channels:
         print(f"\n生成波德圖")
         print(f"有效通道: {', '.join(valid_channels)}")
-        plot_bode_diagram(results)
+        print(f"輸入通道映射: {input_channel_mapping}")
+        plot_bode_diagram(results, input_channel_mapping)
     else:
         print("沒有有效的分析結果")
     
