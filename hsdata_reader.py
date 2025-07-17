@@ -192,6 +192,41 @@ class HSDataReader:
             'magic': self.header['magic']
         }
     
+    def get_statistics(self) -> Dict:
+        """獲取數據統計信息"""
+        if not self.data_records:
+            self.read_data_records()
+        
+        # 準備數據
+        vm_data = np.array([record['vm'] for record in self.data_records])
+        vd_data = np.array([record['vd'] for record in self.data_records])
+        da_data = np.array([record['da'] for record in self.data_records])
+        
+        # 計算統計信息
+        stats = {
+            'total_records': len(self.data_records),
+            'vm': {
+                'mean': np.mean(vm_data, axis=0).tolist(),
+                'std': np.std(vm_data, axis=0).tolist(),
+                'min': np.min(vm_data, axis=0).tolist(),
+                'max': np.max(vm_data, axis=0).tolist()
+            },
+            'vd': {
+                'mean': np.mean(vd_data, axis=0).tolist(),
+                'std': np.std(vd_data, axis=0).tolist(),
+                'min': np.min(vd_data, axis=0).tolist(),
+                'max': np.max(vd_data, axis=0).tolist()
+            },
+            'da': {
+                'mean': np.mean(da_data, axis=0).tolist(),
+                'std': np.std(da_data, axis=0).tolist(),
+                'min': np.min(da_data, axis=0).tolist(),
+                'max': np.max(da_data, axis=0).tolist()
+            }
+        }
+        
+        return stats
+
     def export_to_csv(self, output_path: str, format_type: str = 'combined') -> str:
         """
         導出數據為 CSV 格式
