@@ -6,7 +6,7 @@
 
 - ✅ 讀取 HSData 二進制檔案格式
 - ✅ 驗證檔案格式和數據完整性
-- ✅ 提供多種 CSV 輸出格式
+- ✅ 轉換為 CSV 格式（合併格式）
 - ✅ 生成詳細的統計信息
 - ✅ 支援命令行和程式化使用
 - ✅ 完整的錯誤處理和日誌記錄
@@ -45,20 +45,7 @@ python hsdata_converter.py HSData-2025-07-15-12-15-19.dat -o output.csv
 python hsdata_converter.py HSData-2025-07-15-12-15-19.dat --info --stats
 ```
 
-#### 輸出格式選項
-```bash
-# 合併格式（所有數據在一行）
-python hsdata_converter.py input.dat --format combined
 
-# 分離格式（vm、vd、da 分別導出）
-python hsdata_converter.py input.dat --format separate
-
-# 詳細格式（包含統計信息）
-python hsdata_converter.py input.dat --format detailed
-
-# 所有格式
-python hsdata_converter.py input.dat --format all
-```
 
 #### 其他選項
 ```bash
@@ -86,7 +73,7 @@ if reader.validate_file_format():
     stats = reader.get_statistics()
     
     # 導出 CSV
-    reader.export_to_csv("output.csv", "combined")
+    reader.export_to_csv("output.csv")
 ```
 
 ### 3. 使用範例腳本
@@ -97,23 +84,12 @@ python example_usage.py
 
 ## 輸出格式說明
 
-### 1. 合併格式 (combined)
+### CSV 格式
 單一 CSV 檔案，每行包含：
 - `index`: 記錄索引
 - `vm_0` 到 `vm_5`: 6個 VM 值
 - `vd_0` 到 `vd_5`: 6個 VD 值  
 - `da_0` 到 `da_5`: 6個 DA 值
-
-### 2. 分離格式 (separate)
-生成三個 CSV 檔案：
-- `*_vm.csv`: 僅包含 VM 數據
-- `*_vd.csv`: 僅包含 VD 數據
-- `*_da.csv`: 僅包含 DA 數據
-
-### 3. 詳細格式 (detailed)
-包含統計信息的完整數據：
-- 原始數據（vm_0 到 da_5）
-- 統計信息（平均值、標準差、最小值、最大值）
 
 ## 數據結構
 

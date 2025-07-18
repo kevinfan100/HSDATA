@@ -148,13 +148,13 @@ def create_individual_plots(csv_file, start_index=394106, num_samples=500, sampl
 
 if __name__ == "__main__":
     # Set file path and parameters
-    csv_file = "what_200_0.1_combined_20250717_192317.csv"
-    start_index = 215791
-    num_samples = 5000
+    csv_file = "what_1000_0.1_combined_20250717_224218.csv"
+    start_index = 1
+    num_samples = 200000
     sampling_freq = 100000  # 100 kHz
     
     # Execute visualization
     data = visualize_csv_data(csv_file, start_index, num_samples, sampling_freq)
     
     # Create individual plots
-    create_individual_plots(csv_file, start_index, num_samples, sampling_freq) 
+    # create_individual_plots(csv_file, start_index, num_samples, sampling_freq) 
