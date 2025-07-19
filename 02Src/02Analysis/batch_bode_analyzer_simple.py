@@ -54,23 +54,28 @@ def print_current_config():
     print("=" * 50)
 
 def extract_frequency_from_filename(filename):
-    """從檔名提取頻率 - 支援dc、ndc、pi格式"""
-    # 嘗試匹配 dc{頻率}.dat 格式
-    match = re.search(r'dc([0-9]+\.?[0-9]*)\.dat', filename)
+    """從檔名提取頻率 - 支援dc、ndc、pi、what格式"""
+    # 嘗試匹配 what_{頻率}.dat 格式
+    match = re.search(r'what_([0-9]+\.?[0-9]*)\.dat', filename)
     if match:
         return float(match.group(1))
     else:
-        # 嘗試匹配 ndc{頻率}.dat 格式
-        match = re.search(r'ndc(\d+)\.dat', filename)
+        # 嘗試匹配 dc{頻率}.dat 格式
+        match = re.search(r'dc([0-9]+\.?[0-9]*)\.dat', filename)
         if match:
-            return int(match.group(1))
+            return float(match.group(1))
         else:
-            # 嘗試匹配 pi{頻率}.dat 格式
-            match = re.search(r'pi([0-9]+\.?[0-9]*)\.dat', filename)
+            # 嘗試匹配 ndc{頻率}.dat 格式
+            match = re.search(r'ndc(\d+)\.dat', filename)
             if match:
-                return float(match.group(1))
+                return int(match.group(1))
             else:
-                raise ValueError(f"無法從檔名 {filename} 提取頻率")
+                # 嘗試匹配 pi{頻率}.dat 格式
+                match = re.search(r'pi([0-9]+\.?[0-9]*)\.dat', filename)
+                if match:
+                    return float(match.group(1))
+                else:
+                    raise ValueError(f"無法從檔名 {filename} 提取頻率")
 
 def check_periodicity(signal_data, sampling_freq, target_freq):
     """檢測信號的週期性，使用FFT方法統一檢測"""
@@ -378,7 +383,7 @@ def main():
     
     
     # 執行批量分析
-    results, vd_info = batch_bode_analysis("0716_hsdata_ndc")
+    results, vd_info = batch_bode_analysis("what")
     
     # 檢查是否有有效結果
     valid_channels = [ch for ch, data in results.items() if len(data['freqs']) > 0]
