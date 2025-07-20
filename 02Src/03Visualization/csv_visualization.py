@@ -130,6 +130,8 @@ def visualize_csv_data(csv_file, start_index=0, num_samples=None, sampling_freq=
     ax1.legend(loc='upper right')
     ax1.grid(True, alpha=0.3)
     ax1.set_xlim(0, time_axis[-1])
+
+    # ax1.set_ylim(0.49, 0.53)
     
     # 繪製 VD 資料
     ax2.set_title('VD Data', fontsize=14, fontweight='bold')
@@ -153,6 +155,8 @@ def visualize_csv_data(csv_file, start_index=0, num_samples=None, sampling_freq=
     ax3.legend(loc='upper right')
     ax3.grid(True, alpha=0.3)
     ax3.set_xlim(0, time_axis[-1])
+
+    # ax3.set_ylim(1.9, 2.2)
     
     plt.tight_layout()
     plt.show()
