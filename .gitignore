@@ -2,4 +2,3 @@ __pycache__/
 *.log
 *.dat
 *.csv
-*.ipynb
