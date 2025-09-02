@@ -19,7 +19,7 @@ def example_1_process_single_folder():
     processor = FolderProcessor()
     
     # 指定要處理的資料夾路徑
-    folder_path = "01Data/01Raw_dat/0717_pi"
+    folder_path = "01Data/01Raw_dat/0902_B_1"
     
     # 處理資料夾
     results = processor.process_folder(folder_path)
