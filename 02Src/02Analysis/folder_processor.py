@@ -130,18 +130,3 @@ class FolderProcessor:
         
         return Path.cwd()
     
-    def get_folder_info(self, folder_path: str | Path) -> Dict:
-        """取得資料夾資訊"""
-        folder_path = Path(folder_path)
-        
-        if not folder_path.exists():
-            return {'error': '資料夾不存在'}
-        
-        dat_files = list(folder_path.glob("*.dat"))
-        
-        return {
-            'folder_path': str(folder_path),
-            'dat_count': len(dat_files),
-            'dat_files': [f.name for f in dat_files],
-            'total_size_mb': sum(f.stat().st_size for f in dat_files) / (1024 * 1024)
-        } 
