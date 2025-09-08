@@ -1,45 +1,49 @@
-% BodeAnalyzer.m - 多頻率波德圖分析系統
+% OpenLoopBodeAnalyzer.m - 開環多頻率波德圖分析系統
 % 
 % 主要功能：
 % 1. 批量處理多個頻率的CSV數據檔案
 % 2. 自動檢測激勵通道和頻率
 % 3. 使用穩態後所有整數週期進行FFT分析
-% 4. 生成6通道的波德圖（線性大小 + 對數頻率）
+% 4. 生成6通道的開環波德圖 (VM/DA) - dB尺度
+%
+% 與BodeAnalyzer.m差異：
+% - 計算 VM/DA (開環) 而非 VM/VD (閉環)
+% - 大小響應使用 dB 尺度 (20*log10)
+% - 單位都為電壓 (V/V)
 %
 % 使用方法：
 % 1. 將所有頻率的CSV檔案放在 '01Data/02Processed_csv/' 資料夾
-% 2. 執行 main_bode_analysis() 函數
+% 2. 執行 main_openloop_bode_analysis() 函數
 %
-% 基於HSDataTemplate.m架構，擴展波德圖分析功能
-
-%% ===== 配置參數區 =====
-% 系統參數
-SAMPLING_RATE = 100000;                    % 採樣頻率 (Hz)
-VM_FREQ_TOLERANCE = 0.05;                  % VM頻率偏差容差 (5%)
-MIN_VD_THRESHOLD = 1e-10;                  % VD最小幅值閾值
-DATA_FOLDER = '01Data\02Processed_csv\openloop_Cali_P5';   % 數據資料夾路徑
-
-% 穩態檢測參數（沿用HSDataTemplate設定）
-CONSECUTIVE_PERIODS = 2;                   % 連續穩定週期數
-CHECK_POINTS = 10;                          % 每週期檢查點數
-STABILITY_THRESHOLD = 1e-3;                % 穩定性閾值
-START_PERIOD = 1;                          % 開始檢測的週期數
-
-% 波德圖設定
-MAGNITUDE_SCALE = 'linear';                % 大小：線性尺度
-FREQUENCY_SCALE = 'log';                   % 頻率：對數尺度
-CHANNEL_COLORS = ['r','b','g','m','c','k']; % 6通道顏色
+% 基於HSDataTemplate.m架構，擴展開環波德圖分析功能
 
 %% ===== 主要執行函數 =====
 
-function main_bode_analysis(varargin)
-    % 主執行函數 - 批量波德圖分析
+function main_openloop_bode_analysis(varargin)
+    % 主執行函數 - 批量開環波德圖分析
     %
     % 使用方法:
-    %   main_bode_analysis()                    % 使用預設資料夾
-    %   main_bode_analysis('custom_folder/')    % 使用自訂資料夾
+    %   main_openloop_bode_analysis()                    % 使用預設資料夾
+    %   main_openloop_bode_analysis('custom_folder/')    % 使用自訂資料夾
     
-    fprintf('=== 波德圖分析系統 ===\n');
+    % 配置參數區 - 移到函數內部
+    SAMPLING_RATE = 100000;                    % 採樣頻率 (Hz)
+    VM_FREQ_TOLERANCE = 0.05;                  % VM頻率偏差容差 (5%)
+    MIN_DA_THRESHOLD = 1e-10;                  % DA最小幅值閾值
+    DATA_FOLDER = '01Data\02Processed_csv\openloop_Cali_P5';   % 數據資料夾路徑
+    
+    % 穩態檢測參數（沿用HSDataTemplate設定）
+    CONSECUTIVE_PERIODS = 2;                   % 連續穩定週期數
+    CHECK_POINTS = 10;                          % 每週期檢查點數
+    STABILITY_THRESHOLD = 1e-3;                % 穩定性閾值
+    START_PERIOD = 1;                          % 開始檢測的週期數
+    
+    % 波德圖設定
+    MAGNITUDE_SCALE = 'db';                    % 大小：dB尺度
+    FREQUENCY_SCALE = 'log';                   % 頻率：對數尺度
+    CHANNEL_COLORS = ['r','b','g','m','c','k']; % 6通道顏色
+    
+    fprintf('=== 開環波德圖分析系統 ===\n');
     
     % 解析輸入參數
     if nargin > 0
@@ -57,7 +61,7 @@ function main_bode_analysis(varargin)
     
     % 批量分析所有CSV檔案
     fprintf('\n開始批量分析...\n');
-    [frequencies, magnitudes, phases] = batch_analyze_csv_folder(csv_folder);
+    [frequencies, magnitudes_db, phases] = batch_analyze_csv_folder_openloop(csv_folder);
     
     % 檢查是否有有效結果
     if isempty(frequencies)
@@ -73,22 +77,22 @@ function main_bode_analysis(varargin)
     fprintf('成功處理 %d 個頻率點\n', length(frequencies));
     fprintf('頻率範圍: %.1f - %.1f Hz\n', min(frequencies), max(frequencies));
     
-    % 繪製波德圖
-    fprintf('\n生成波德圖...\n');
-    plot_bode_diagram_vertical(frequencies, magnitudes, phases);
+    % 繪製開環波德圖
+    fprintf('\n生成開環波德圖...\n');
+    plot_openloop_bode_diagram_vertical(frequencies, magnitudes_db, phases);
     
     % 顯示完成信息
-    fprintf('\n=== 波德圖分析完成！===\n');
+    fprintf('\n=== 開環波德圖分析完成！===\n');
     fprintf('結果:\n');
     fprintf('- 頻率點數: %d\n', length(frequencies));
     fprintf('- 通道數: 6\n');
     fprintf('- 圖形已顯示\n');
     
     % 可選：將結果保存到工作空間變數
-    assignin('base', 'bode_frequencies', frequencies);
-    assignin('base', 'bode_magnitudes', magnitudes);
-    assignin('base', 'bode_phases', phases);
-    fprintf('- 結果已保存到工作空間變數: bode_frequencies, bode_magnitudes, bode_phases\n');
+    assignin('base', 'openloop_frequencies', frequencies);
+    assignin('base', 'openloop_magnitudes_db', magnitudes_db);
+    assignin('base', 'openloop_phases', phases);
+    fprintf('- 結果已保存到工作空間變數: openloop_frequencies, openloop_magnitudes_db, openloop_phases\n');
 end
 
 %% ===== 第一部分：資料預處理函數（基於HSDataTemplate.m）=====
@@ -347,21 +351,21 @@ function period_data = extract_all_integer_periods(signal, steady_info, excite_f
     fprintf('提取了 %d 個完整週期，數據長度: %d 點\n', available_periods, length(period_data));
 end
 
-function [vm_fft_results, vd_fft_results, freq_axis] = fft_analysis_with_all_periods(vm_data, vd_data, excite_ch, excite_freq, steady_info)
-    % 對所有VM通道和激勵VD通道進行FFT分析
+function [vm_fft_results, da_fft_results, freq_axis] = fft_analysis_with_all_periods_openloop(vm_data, da_data, excite_ch, excite_freq, steady_info)
+    % 對所有VM通道和激勵DA通道進行FFT分析（開環版本）
     %
     % 輸入:
     %   vm_data - VM數據 (6 x N)
-    %   vd_data - VD數據 (6 x N)
+    %   da_data - DA數據 (6 x N)
     %   excite_ch - 激勵通道編號
     %   excite_freq - 激勵頻率 (Hz)
     %   steady_info - 穩態檢測結果
     % 輸出:
     %   vm_fft_results - VM的FFT結果 (6 x M)
-    %   vd_fft_results - VD的FFT結果 (1 x M)
+    %   da_fft_results - DA的FFT結果 (1 x M)
     %   freq_axis - 頻率軸 (1 x M)
     
-    fprintf('執行FFT分析...\n');
+    fprintf('執行開環FFT分析...\n');
     
     % 對所有VM通道提取週期數據並進行FFT
     vm_fft_results = zeros(6, 0);
@@ -375,16 +379,16 @@ function [vm_fft_results, vd_fft_results, freq_axis] = fft_analysis_with_all_per
         vm_fft_results(ch, :) = vm_fft;
     end
     
-    % 對激勵VD通道進行相同處理
-    vd_signal = vd_data(excite_ch, :);
-    vd_period_data = extract_all_integer_periods(vd_signal, steady_info, excite_freq, SAMPLING_RATE);
-    vd_fft_results = fft(vd_period_data);
+    % 對激勵DA通道進行相同處理
+    da_signal = da_data(excite_ch, :);
+    da_period_data = extract_all_integer_periods(da_signal, steady_info, excite_freq, SAMPLING_RATE);
+    da_fft_results = fft(da_period_data);
     
     % 建立頻率軸
-    N = length(vd_period_data);
+    N = length(da_period_data);
     freq_axis = (0:N-1) * SAMPLING_RATE / N;
     
-    fprintf('FFT分析完成，頻率解析度: %.3f Hz\n', SAMPLING_RATE / N);
+    fprintf('開環FFT分析完成，頻率解析度: %.3f Hz\n', SAMPLING_RATE / N);
 end
 
 function [actual_freq_bin, deviation_percent] = detect_vm_frequency_deviation(vm_fft, excite_freq, freq_axis)
@@ -426,48 +430,49 @@ function [actual_freq_bin, deviation_percent] = detect_vm_frequency_deviation(vm
     end
 end
 
-function [magnitude_ratio, phase_diff] = calculate_vm_vd_ratio(vm_fft, vd_fft, freq_bin)
-    % 計算傳遞函數 H(jω) = VM(jω) / VD(jω)
+function [magnitude_db, phase_diff] = calculate_vm_da_ratio(vm_fft, da_fft, freq_bin)
+    % 計算開環傳遞函數 H(jω) = VM(jω) / DA(jω)
     %
     % 輸入:
     %   vm_fft - VM通道的FFT結果 (1 x N)
-    %   vd_fft - VD通道的FFT結果 (1 x N)
+    %   da_fft - DA通道的FFT結果 (1 x N)
     %   freq_bin - 目標頻率的bin索引
     % 輸出:
-    %   magnitude_ratio - 大小比值（線性）
+    %   magnitude_db - 大小比值（dB）
     %   phase_diff - 相位差（度數）
     
     % 提取複數值
     vm_complex = vm_fft(freq_bin);
-    vd_complex = vd_fft(freq_bin);
+    da_complex = da_fft(freq_bin);
     
-    % 檢查VD信號是否足夠大
-    vd_magnitude = abs(vd_complex);
-    if vd_magnitude < MIN_VD_THRESHOLD
-        fprintf('警告: VD信號幅值太小 (%.2e)，設為零\n', vd_magnitude);
-        magnitude_ratio = 0;
+    % 檢查DA信號是否足夠大
+    da_magnitude = abs(da_complex);
+    if da_magnitude < MIN_DA_THRESHOLD
+        fprintf('警告: DA信號幅值太小 (%.2e)，設為零\n', da_magnitude);
+        magnitude_db = -Inf;  % dB尺度下的零
         phase_diff = 0;
         return;
     end
     
     % 計算傳遞函數
-    transfer_function = vm_complex / vd_complex;
+    transfer_function = vm_complex / da_complex;
     
     % 提取大小和相位
-    magnitude_ratio = abs(transfer_function);
+    magnitude_linear = abs(transfer_function);
+    magnitude_db = 20 * log10(magnitude_linear);  % 轉換為dB
     phase_diff = angle(transfer_function) * 180 / pi;  % 轉換為度數
 end
 
-%% ===== 第三部分：波德圖繪製函數 =====
+%% ===== 第三部分：開環波德圖繪製函數 =====
 
-function [frequencies, magnitudes, phases] = batch_analyze_csv_folder(csv_folder_path)
-    % 批量處理資料夾內所有CSV檔案
+function [frequencies, magnitudes_db, phases] = batch_analyze_csv_folder_openloop(csv_folder_path)
+    % 批量處理資料夾內所有CSV檔案（開環版本）
     %
     % 輸入:
     %   csv_folder_path - CSV檔案資料夾路徑
     % 輸出:
     %   frequencies - 所有頻率點 (1 x N)
-    %   magnitudes - 6通道的大小數據 (6 x N)
+    %   magnitudes_db - 6通道的大小數據 dB (6 x N)
     %   phases - 6通道的相位數據 (6 x N)
     
     fprintf('批量分析資料夾: %s\n', csv_folder_path);
@@ -483,7 +488,7 @@ function [frequencies, magnitudes, phases] = batch_analyze_csv_folder(csv_folder
     
     % 初始化結果陣列
     frequencies = [];
-    magnitudes = zeros(6, 0);
+    magnitudes_db = zeros(6, 0);
     phases = zeros(6, 0);
     
     % 處理每個CSV檔案
@@ -513,29 +518,29 @@ function [frequencies, magnitudes, phases] = batch_analyze_csv_folder(csv_folder
                 continue;
             end
             
-            % 第二部分：FFT分析
-            fprintf('  步驟4: FFT分析...\n');
-            [vm_fft, vd_fft, freq_axis] = fft_analysis_with_all_periods(vm, vd, excite_ch, excite_freq, steady_info);
+            % 第二部分：開環FFT分析
+            fprintf('  步驟4: 開環FFT分析...\n');
+            [vm_fft, da_fft, freq_axis] = fft_analysis_with_all_periods_openloop(vm, da_volt, excite_ch, excite_freq, steady_info);
             
-            % 計算所有6個通道的VM/VD比值
-            fprintf('  步驟5: 計算傳遞函數...\n');
-            current_magnitudes = zeros(6, 1);
+            % 計算所有6個通道的VM/DA比值
+            fprintf('  步驟5: 計算開環傳遞函數...\n');
+            current_magnitudes_db = zeros(6, 1);
             current_phases = zeros(6, 1);
             
             for ch = 1:6
                 % 檢測VM頻域偏差
                 [freq_bin, ~] = detect_vm_frequency_deviation(vm_fft(ch, :), excite_freq, freq_axis);
                 
-                % 計算VM/VD比值
-                [mag, phase] = calculate_vm_vd_ratio(vm_fft(ch, :), vd_fft, freq_bin);
+                % 計算VM/DA比值
+                [mag_db, phase] = calculate_vm_da_ratio(vm_fft(ch, :), da_fft, freq_bin);
                 
-                current_magnitudes(ch) = mag;
+                current_magnitudes_db(ch) = mag_db;
                 current_phases(ch) = phase;
             end
             
             % 添加到結果陣列
             frequencies(end+1) = excite_freq;
-            magnitudes(:, end+1) = current_magnitudes;
+            magnitudes_db(:, end+1) = current_magnitudes_db;
             phases(:, end+1) = current_phases;
             
             fprintf('  ✓ 分析完成：頻率 %.1f Hz\n', excite_freq);
@@ -549,7 +554,7 @@ function [frequencies, magnitudes, phases] = batch_analyze_csv_folder(csv_folder
     % 按頻率排序結果
     if ~isempty(frequencies)
         [frequencies, sort_idx] = sort(frequencies);
-        magnitudes = magnitudes(:, sort_idx);
+        magnitudes_db = magnitudes_db(:, sort_idx);
         phases = phases(:, sort_idx);
         
         fprintf('\n批量分析完成！\n');
@@ -561,51 +566,54 @@ function [frequencies, magnitudes, phases] = batch_analyze_csv_folder(csv_folder
     end
 end
 
-function plot_bode_diagram_vertical(frequencies, magnitudes, phases)
-    % 繪製6通道垂直排列的波德圖
+function plot_openloop_bode_diagram_vertical(frequencies, magnitudes_db, phases)
+    % 繪製6通道垂直排列的開環波德圖
     %
     % 輸入:
     %   frequencies - 頻率點 (1 x N)
-    %   magnitudes - 6通道大小數據 (6 x N)
+    %   magnitudes_db - 6通道大小數據 dB (6 x N)
     %   phases - 6通道相位數據 (6 x N)
     
     if isempty(frequencies)
         error('沒有數據可繪製');
     end
     
-    fprintf('繪製波德圖...\n');
+    fprintf('繪製開環波德圖...\n');
     
     % 創建圖形窗口
-    figure('Name', '6通道波德圖', 'Position', [100, 100, 1200, 800]);
+    figure('Name', '6通道開環波德圖 (VM/DA)', 'Position', [100, 100, 1200, 800]);
     
     % 定義6通道顏色
     colors = CHANNEL_COLORS;
     
-    % 上圖：大小響應（線性尺度）
+    % 上圖：大小響應（dB尺度）
     subplot(2, 1, 1);
     hold on;
     
     for ch = 1:6
-        % 使用對數頻率軸和線性大小
-        semilogx(frequencies, magnitudes(ch, :), ...
+        % 使用對數頻率軸和dB大小
+        semilogx(frequencies, magnitudes_db(ch, :), ...
                 'Color', colors(ch), 'LineWidth', 2, 'Marker', 'o', ...
                 'MarkerSize', 6, 'DisplayName', sprintf('CH%d', ch));
     end
     
     % 設定上圖屬性
     xlabel('頻率 (Hz)');
-    ylabel('大小 (線性)');
-    title('波德圖 - 大小響應');
+    ylabel('大小 (dB)');
+    title('開環波德圖 - 大小響應 (VM/DA)');
     legend('Location', 'best');
     grid on;
     grid minor;
     hold off;
     
     % 設定合理的Y軸範圍
-    y_min = min(magnitudes(:));
-    y_max = max(magnitudes(:));
-    if y_max > y_min
-        ylim([max(0, y_min * 0.9), y_max * 1.1]);
+    finite_mags = magnitudes_db(isfinite(magnitudes_db));
+    if ~isempty(finite_mags)
+        y_min = min(finite_mags);
+        y_max = max(finite_mags);
+        if y_max > y_min
+            ylim([y_min - 5, y_max + 5]);  % dB範圍留5dB餘量
+        end
     end
     
     % 下圖：相位響應
@@ -622,7 +630,7 @@ function plot_bode_diagram_vertical(frequencies, magnitudes, phases)
     % 設定下圖屬性
     xlabel('頻率 (Hz)');
     ylabel('相位 (度)');
-    title('波德圖 - 相位響應');
+    title('開環波德圖 - 相位響應 (VM/DA)');
     legend('Location', 'best');
     grid on;
     grid minor;
@@ -637,24 +645,27 @@ function plot_bode_diagram_vertical(frequencies, magnitudes, phases)
     yline(-90, '--k', 'Alpha', 0.3);
     
     % 整體佈局調整
-    sgtitle('6通道波德圖分析結果', 'FontSize', 14, 'FontWeight', 'bold');
+    sgtitle('6通道開環波德圖分析結果 (VM/DA)', 'FontSize', 14, 'FontWeight', 'bold');
     
     % 顯示統計信息
-    fprintf('波德圖統計信息:\n');
+    fprintf('開環波德圖統計信息:\n');
     fprintf('頻率範圍: %.1f - %.1f Hz\n', min(frequencies), max(frequencies));
-    fprintf('大小範圍: %.3f - %.3f\n', min(magnitudes(:)), max(magnitudes(:)));
+    finite_mags = magnitudes_db(isfinite(magnitudes_db));
+    if ~isempty(finite_mags)
+        fprintf('大小範圍: %.1f - %.1f dB\n', min(finite_mags), max(finite_mags));
+    end
     fprintf('相位範圍: %.1f - %.1f 度\n', min(phases(:)), max(phases(:)));
     
-    fprintf('波德圖繪製完成！\n');
+    fprintf('開環波德圖繪製完成！\n');
 end
 
 %% ===== 使用範例 =====
 
 % 範例1: 基本使用（使用預設資料夾）
-% main_bode_analysis();
+% main_openloop_bode_analysis();
 
 % 範例2: 指定自訂資料夾
-% main_bode_analysis('01Data/02Processed_csv/my_experiment/');
+% main_openloop_bode_analysis('01Data/02Processed_csv/my_openloop_experiment/');
 
 % 範例3: 手動單檔案分析
 % [vm_raw, vd_raw, da_raw] = load_csv_data('01Data/02Processed_csv/test1.csv');
@@ -662,10 +673,10 @@ end
 % da_volt = dac_to_voltage(da);
 % [excite_ch, excite_freq] = find_excitation_channel(da_volt, SAMPLING_RATE);
 % steady_info = detect_steady_state_clean(vm, excite_freq);
-% [vm_fft, vd_fft, freq_axis] = fft_analysis_with_all_periods(vm, vd, excite_ch, excite_freq, steady_info);
+% [vm_fft, da_fft, freq_axis] = fft_analysis_with_all_periods_openloop(vm, da_volt, excite_ch, excite_freq, steady_info);
 
 % 範例4: 僅繪製已有的數據
-% plot_bode_diagram_vertical(bode_frequencies, bode_magnitudes, bode_phases);
+% plot_openloop_bode_diagram_vertical(openloop_frequencies, openloop_magnitudes_db, openloop_phases);
 
 %% ===== 系統功能總結 =====
 % 
@@ -674,7 +685,8 @@ end
 % 3. 穩態分析: 確保使用穩定的信號段
 % 4. 週期性FFT: 使用整數週期避免頻譜洩漏
 % 5. 多通道分析: 同時分析6個VM通道
-% 6. 波德圖可視化: 線性大小+對數頻率，垂直佈局
+% 6. 開環波德圖可視化: dB大小+對數頻率，垂直佈局
+% 7. 主頻檢查: 檢測VM信號與激勵頻率的偏差
 % 
 % 輸入要求:
 % - CSV檔案包含vm_0~vm_5, vd_0~vd_5, da_0~da_5欄位
@@ -682,8 +694,8 @@ end
 % - 數據長度足夠包含穩態後的多個週期
 % 
 % 輸出結果:
-% - 6通道波德圖（大小+相位）
-% - 工作空間變數: bode_frequencies, bode_magnitudes, bode_phases
+% - 6通道開環波德圖（dB大小+相位）
+% - 工作空間變數: openloop_frequencies, openloop_magnitudes_db, openloop_phases
 %
 %% ===== 故障排除 =====
 %
@@ -692,9 +704,9 @@ end
 % 2. "未檢測到有效的激勵通道" → 檢查DA信號是否有週期性
 % 3. "穩態檢測失敗" → 調整STABILITY_THRESHOLD或檢查信號品質
 % 4. "頻率偏差超過容差" → 檢查激勵頻率穩定性
-% 5. "VD信號幅值太小" → 檢查激勵通道的信號強度
+% 5. "DA信號幅值太小" → 檢查激勵通道的信號強度
 %
 % 參數調整:
 % - VM_FREQ_TOLERANCE: 調整頻率偏差容差
 % - STABILITY_THRESHOLD: 調整穩態檢測敏感度
-% - MIN_VD_THRESHOLD: 調整最小激勵信號閾值
+% - MIN_DA_THRESHOLD: 調整最小激勵信號閾值

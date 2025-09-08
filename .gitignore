@@ -1,4 +1,7 @@
 __pycache__/
+.claude/
+01Raw_dat/
+02Processed_csv/
 *.log
 *.dat
 *.csv
