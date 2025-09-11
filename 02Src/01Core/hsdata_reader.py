@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-HSData 二進制檔案讀取器 - 批次處理版本
-支援整個資料夾的批次處理和自動路徑結構
+HSData 二進制檔案讀取器 - 單一資料夾處理版本
+只處理指定的單一子資料夾
+
+Guide to use:
+1. put the file in the project folder with path: 02Src/01core/hsdata_reader.py
+2. create a folder to save the .dat files in the project file with path: 01Data/01Raw_dat
+3. create a folder to save the .csv files in the project file with path :01Data/02Processed_csv
+4. put your .dat files in the folder: 01Data/01Raw_dat/foldername/yourfile.dat
+5. change the target_folder to your target folder and run this script to process the .dat files in SPECIFIC folder only
+6. the .csv files will be saved in the folder: 01Data/02Processed_csv/foldername/yourfile.csv
 """
 
 import struct
@@ -204,7 +212,7 @@ class HSDataReader:
 
 
 class BatchProcessor:
-    """批次處理器 - 處理整個資料夾"""
+    """批次處理器 - 處理指定的單一資料夾"""
     
     def __init__(self, input_folder: str | Path, output_folder: Optional[str | Path] = None):
         self.input_folder = Path(input_folder)
@@ -215,19 +223,19 @@ class BatchProcessor:
         if not self.input_folder.exists():
             raise FileNotFoundError(f"輸入資料夾不存在: {self.input_folder}")
 
-    def find_dat_files(self, recursive: bool = True) -> List[Path]:
-        """尋找所有 .dat 檔案"""
+    def find_dat_files(self, recursive: bool = False) -> List[Path]:
+        """尋找指定資料夾中的所有 .dat 檔案 (預設不遞迴搜尋)"""
         if recursive:
             pattern = "**/*.dat"
         else:
             pattern = "*.dat"
         
         dat_files = list(self.input_folder.glob(pattern))
-        print(f"找到 {len(dat_files)} 個 .dat 檔案")
+        print(f"在資料夾 '{self.input_folder.name}' 中找到 {len(dat_files)} 個 .dat 檔案")
         return dat_files
 
-    def process_folder(self, recursive: bool = True, skip_existing: bool = True) -> Dict:
-        """批次處理整個資料夾"""
+    def process_folder(self, recursive: bool = False, skip_existing: bool = True) -> Dict:
+        """批次處理指定的單一資料夾"""
         dat_files = self.find_dat_files(recursive)
         
         if not dat_files:
@@ -238,7 +246,7 @@ class BatchProcessor:
         failed_count = 0
         skipped_count = 0
         
-        print(f"\n開始批次處理 {len(dat_files)} 個檔案...")
+        print(f"\n開始處理資料夾 '{self.input_folder.name}' 中的 {len(dat_files)} 個檔案...")
         print("=" * 60)
         
         for i, file_path in enumerate(dat_files, 1):
@@ -280,7 +288,7 @@ class BatchProcessor:
         
         # 顯示總結
         print("\n" + "=" * 60)
-        print("批次處理完成！")
+        print(f"資料夾 '{self.input_folder.name}' 處理完成！")
         print(f"✅ 成功處理: {processed_count} 個檔案")
         print(f"❌ 處理失敗: {failed_count} 個檔案")
         
@@ -318,67 +326,35 @@ class BatchProcessor:
         return output_path
 
 def main():
-    """主程式 - 批次處理版本"""
+    """主程式 - 單一資料夾處理版本"""
     
-    # 設定路徑
-    input_folder = "C:/Users/lu921/Desktop/git_repos/HSDATA/01Data/01Raw_dat"
-    output_folder = "C:/Users/lu921/Desktop/git_repos/HSDATA/01Data/02Processed_csv"
+    # ========== 在這裡修改要處理的特定資料夾名稱 ==========
+    target_folder = "jump"  # 改成你要處理的資料夾名稱
     
-    # 方式1: 使用指定的輸出資料夾
+    # 基礎路徑設定 - 根據你的電腦路徑修改
+    base_input_folder = "C:/Users/lu921/Desktop/git_repos/HSDATA/01Data/01Raw_dat"
+    base_output_folder = "C:/Users/lu921/Desktop/git_repos/HSDATA/01Data/02Processed_csv"
+    
+    # 組合出完整的輸入和輸出路徑
+    input_folder = Path(base_input_folder) / target_folder
+    output_folder = Path(base_output_folder) / target_folder
+    
     try:
-        print("🚀 開始批次處理...")
+        print(f"開始處理資料夾: {target_folder}")
+        print(f"輸入路徑: {input_folder}")
+        print(f"輸出路徑: {output_folder}")
+        
         processor = BatchProcessor(input_folder, output_folder)
         
-        # 處理整個資料夾 (遞迴搜尋子資料夾)
+        # 處理指定資料夾 (不遞迴搜尋子資料夾)
         results = processor.process_folder(
-            recursive=True,      # 遞迴搜尋子資料夾
+            recursive=False,     # 不遞迴搜尋，只處理當前資料夾
             skip_existing=True   # 跳過已存在的檔案
         )
         
     except Exception as e:
-        print(f"❌ 批次處理失敗: {e}")
+        print(f"❌ 處理失敗: {e}")
         return
-    
-    # 方式2: 使用自動路徑 (註解掉，可依需求切換)
-    """
-    try:
-        print("🚀 開始批次處理 (自動路徑)...")
-        processor = BatchProcessor(input_folder)  # 不指定輸出資料夾
-        
-        results = processor.process_folder(recursive=True, skip_existing=True)
-        report_path = processor.generate_summary_report()
-        
-        print(f"\n🎉 批次處理全部完成！")
-        print(f"📊 詳細報告: {report_path}")
-        
-    except Exception as e:
-        print(f"❌ 批次處理失敗: {e}")
-        return
-    """
-
-
-def single_file_example():
-    """單檔處理範例 (保留原功能)"""
-    file_path = "C:/Users/lu921/Desktop/git_repos/HSDATA/01Data/01Raw_dat/jump/500_jump_newB.dat"
-    
-    try:
-        reader = HSDataReader(file_path)
-        header = reader.read_header()
-        
-        if reader.validate_format():
-            print("檔案格式驗證通過")
-            info = reader.get_info()
-            print(f"檔案大小: {info['file_size_mb']} MB")
-            
-            data_records = reader.read_data()
-            df = reader.to_dataframe()
-            csv_path = reader.to_csv()
-            print(f"CSV 檔案已儲存至: {csv_path}")
-        
-    except Exception as e:
-        print(f"錯誤: {e}")
-
 
 if __name__ == "__main__":
-    main()  # 執行批次處理
-    # single_file_example()  # 或執行單檔處理範例
+    main()
