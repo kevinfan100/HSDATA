@@ -1,4 +1,4 @@
-% HSDataTemplate.m - VM/VD/DA數據處理基礎模板
+% HSDataTemplate.m - VM/VD/DA數據處理基礎模板，模組化進行相關分析
 % 
 % 主要功能：
 % 1. 讀取CSV格式的VM、VD、DA數據
@@ -30,7 +30,7 @@ START_PERIOD = 1;                                    % 開始檢測的週期數
 DISPLAY_PERIODS = 10;                                % 顯示週期數
 CHANNELS_TO_PLOT = 1:6;                              % 要顯示的通道 (1-6)
 
-%% ===== 主要功能函數 =====
+%% ===== 主要功能函數(進行數據處裡) =====
 
 function main()
     % 主執行函數 - 展示完整的數據處理流程（使用乾淨數據）
@@ -259,6 +259,73 @@ function steady_info = detect_steady_state_clean(vm_clean, target_freq, varargin
     end
 end
 
+%%===== 檢測激勵通道與頻率(如有需要) =====
+function [excite_ch, excite_freq] = find_excitation_channel(da_voltage, sampling_rate)
+    % 同時檢測激勵通道和頻率
+    %
+    % 輸入:
+    %   da_voltage - DA電壓數據 (6 x N)
+    %   sampling_rate - 採樣頻率 (Hz)
+    % 輸出:
+    %   excite_ch - 激勵通道編號 (1-6)
+    %   excite_freq - 激勵頻率 (Hz)
+    
+    fprintf('檢測激勵通道和頻率...\n');
+    
+    best_channel = 0;
+    max_energy = 0;
+    best_freq = 0;
+    
+    % 檢查每個DA通道
+    for ch = 1:6
+        signal_data = da_voltage(ch, :);
+        
+        % 計算信號的總能量（RMS）
+        signal_energy = sqrt(mean(signal_data.^2));
+        
+        % 只對能量較大的信號進行FFT分析
+        if signal_energy > 0.1  % 閾值可調整
+            % FFT分析檢測主頻率
+            N = length(signal_data);
+            fft_result = fft(signal_data);
+            freq_axis = (0:N-1) * sampling_rate / N;
+            
+            % 只考慮正頻率部分，且排除DC成分
+            positive_freqs = freq_axis(2:floor(N/2));
+            positive_fft = abs(fft_result(2:floor(N/2)));
+            
+            % 找到最大幅值對應的頻率
+            [max_amplitude, max_idx] = max(positive_fft);
+            dominant_freq = positive_freqs(max_idx);
+            
+            % 計算該頻率處的能量
+            freq_energy = max_amplitude;
+            
+            fprintf('  CH%d: 總能量=%.3f, 主頻率=%.1fHz, 頻率能量=%.1f\n', ...
+                    ch, signal_energy, dominant_freq, freq_energy);
+            
+            % 選擇頻率能量最大的通道
+            if freq_energy > max_energy
+                max_energy = freq_energy;
+                best_channel = ch;
+                best_freq = dominant_freq;
+            end
+        else
+            fprintf('  CH%d: 總能量=%.3f (太小，跳過)\n', ch, signal_energy);
+        end
+    end
+    
+    if best_channel == 0
+        error('未檢測到有效的激勵通道');
+    end
+    
+    excite_ch = best_channel;
+    excite_freq = best_freq;
+    
+    fprintf('檢測結果: 激勵通道 DA%d, 激勵頻率 %.1f Hz\n', excite_ch, excite_freq);
+end
+
+%% ===== 繪製乾淨數據的時域響應圖 =====
 function plot_clean_signals(clean_data, data_type, steady_info, target_freq, display_periods, channels)
     % 繪製乾淨數據的時域響應圖
     %
@@ -331,6 +398,7 @@ function plot_clean_signals(clean_data, data_type, steady_info, target_freq, dis
     fprintf('已顯示%s乾淨數據: %d個通道，%d個週期\n', data_type, length(channels), display_periods);
 end
 
+%% ===== 繪製VM vs VD相位圖 =====
 function plot_vm_vd_phase_diagram(vm_clean, vd_clean, steady_info, target_freq, channels)
     % 繪製VM vs VD相位圖（一個週期的疊圖）
     %
@@ -407,31 +475,497 @@ function plot_vm_vd_phase_diagram(vm_clean, vd_clean, steady_info, target_freq, 
     fprintf('已顯示VM vs VD相位圖: %d個通道，1個週期\n', length(channels));
 end
 
-%% ===== 工具函數 =====
+%% ===== 開環FFT 分析 =====
+%執行 FFT 並從其結果中計算出轉移函數的完整過程 同時將數據點必須按照頻率從低到高的順序連接起來
+function [frequencies, magnitudes_db, phases] = batch_analyze_csv_folder_openloop(csv_folder_path)
+    % 批量處理資料夾內所有CSV檔案（開環版本）
+    %
+    % 輸入:
+    %   csv_folder_path - CSV檔案資料夾路徑
+    % 輸出:
+    %   frequencies - 所有頻率點 (1 x N)
+    %   magnitudes_db - 6通道的大小數據 dB (6 x N)
+    %   phases - 6通道的相位數據 (6 x N)
+    
+    fprintf('批量分析資料夾: %s\n', csv_folder_path);
+    
+    % 獲取所有CSV檔案
+    csv_files = dir(fullfile(csv_folder_path, '*.csv'));
+    
+    if isempty(csv_files)
+        error('資料夾中沒有找到CSV檔案: %s', csv_folder_path);
+    end
+    
+    fprintf('找到 %d 個CSV檔案\n', length(csv_files));
+    
+    % 初始化結果陣列
+    frequencies = [];
+    magnitudes_db = zeros(6, 0);
+    phases = zeros(6, 0);
+    
+    % 處理每個CSV檔案
+    for i = 1:length(csv_files)
+        csv_file = csv_files(i);
+        file_path = fullfile(csv_folder_path, csv_file.name);
+        
+        fprintf('\n[%d/%d] 處理檔案: %s\n', i, length(csv_files), csv_file.name);
+        
+        try
+            % 第一部分：預處理
+            fprintf('  步驟1: 讀取和清理數據...\n');
+            [vm_raw, vd_raw, da_raw] = load_csv_data(file_path);
+            [vm, vd, da] = clean_all_data(vm_raw, vd_raw, da_raw);
+            da_volt = dac_to_voltage(da);
+            
+            % 檢測激勵通道和頻率
+            fprintf('  步驟2: 檢測激勵通道和頻率...\n');
+            [excite_ch, excite_freq] = find_excitation_channel(da_volt, SAMPLING_RATE);
+            
+            % 穩態檢測
+            fprintf('  步驟3: 穩態檢測...\n');
+            steady_info = detect_steady_state_clean(vm, excite_freq);
+            
+            if isempty(steady_info)
+                fprintf('  ✗ 穩態檢測失敗，跳過此檔案\n');
+                continue;
+            end
+            
+            % 第二部分：開環FFT分析
+            fprintf('  步驟4: 開環FFT分析...\n');
+            [vm_fft, da_fft, freq_axis] = fft_analysis_with_all_periods_openloop(vm, da_volt, excite_ch, excite_freq, steady_info);
+            
+            % 計算所有6個通道的VM/DA比值
+            fprintf('  步驟5: 計算開環傳遞函數...\n');
+            current_magnitudes_db = zeros(6, 1);
+            current_phases = zeros(6, 1);
+            
+            for ch = 1:6
+                % 檢測VM頻域偏差
+                [freq_bin, ~] = detect_vm_frequency_deviation(vm_fft(ch, :), excite_freq, freq_axis);
+                
+                % 計算VM/DA比值
+                [mag_db, phase] = calculate_vm_da_ratio(vm_fft(ch, :), da_fft, freq_bin);
+                
+                current_magnitudes_db(ch) = mag_db;
+                current_phases(ch) = phase;
+            end
+            
+            % 添加到結果陣列
+            frequencies(end+1) = excite_freq;
+            magnitudes_db(:, end+1) = current_magnitudes_db;
+            phases(:, end+1) = current_phases;
+            
+            fprintf('  ✓ 分析完成：頻率 %.1f Hz\n', excite_freq);
+            
+        catch ME
+            fprintf('  ✗ 處理失敗: %s\n', ME.message);
+            continue;
+        end
+    end
+     % 按頻率排序結果
+    if ~isempty(frequencies)
+        [frequencies, sort_idx] = sort(frequencies);
+        magnitudes_db = magnitudes_db(:, sort_idx);
+        phases = phases(:, sort_idx);
+        
+        fprintf('\n批量分析完成！\n');
+        fprintf('成功處理 %d 個頻率點: ', length(frequencies));
+        fprintf('%.1f ', frequencies);
+        fprintf('Hz\n');
+    else
+        fprintf('\n批量分析完成，但沒有有效結果\n');
+    end
+end
+function period_data = extract_all_integer_periods(signal, steady_info, excite_freq, sampling_rate)
+    % 提取穩態後所有可用的完整週期
+    %
+    % 輸入:
+    %   signal - 輸入信號 (1 x N)
+    %   steady_info - 穩態檢測結果結構
+    %   excite_freq - 激勵頻率 (Hz)
+    %   sampling_rate - 採樣頻率 (Hz)
+    % 輸出:
+    %   period_data - 完整週期數據 (1 x M)
+    
+    % 計算每週期的採樣點數
+    period_samples = round(sampling_rate / excite_freq);
+    
+    % 計算穩態後可用的數據長度
+    steady_start = steady_info.index;
+    available_length = length(signal) - steady_start + 1;
+    
+    % 計算可提取的完整週期數
+    available_periods = floor(available_length / period_samples);
+    
+    if available_periods < 1
+        error('穩態後數據不足一個完整週期');
+    end
+    
+    % 提取所有完整週期的數據
+    end_index = steady_start + available_periods * period_samples - 1;
+    period_data = signal(steady_start:end_index);
+    
+    fprintf('提取了 %d 個完整週期，數據長度: %d 點\n', available_periods, length(period_data));
+end
 
-function show_data_info(vm_data, vd_data, da_data)
-    % 顯示數據基本信息
+function [vm_fft_results, da_fft_results, freq_axis] = fft_analysis_with_all_periods_openloop(vm_data, da_data, excite_ch, excite_freq, steady_info)
+    % 對所有VM通道和激勵DA通道進行FFT分析（開環版本）
+    %
+    % 輸入:
+    %   vm_data - VM數據 (6 x N)
+    %   da_data - DA數據 (6 x N)
+    %   excite_ch - 激勵通道編號
+    %   excite_freq - 激勵頻率 (Hz)
+    %   steady_info - 穩態檢測結果
+    % 輸出:
+    %   vm_fft_results - VM的FFT結果 (6 x M)
+    %   da_fft_results - DA的FFT結果 (1 x M)
+    %   freq_axis - 頻率軸 (1 x M)
     
-    fprintf('\n=== 數據信息 ===\n');
-    fprintf('數據長度: %d 樣本點\n', size(vm_data, 2));
-    fprintf('採樣時間: %.3f 秒\n', size(vm_data, 2) / 100000);
+    fprintf('執行開環FFT分析...\n');
     
-    fprintf('\nVM數據範圍:\n');
-    for i = 1:6
-        fprintf('  Ch%d: %.6f ~ %.6f V\n', i, min(vm_data(i, :)), max(vm_data(i, :)));
+    % 對所有VM通道提取週期數據並進行FFT
+    vm_fft_results = zeros(6, 0);
+    
+    for ch = 1:6
+        vm_signal = vm_data(ch, :);
+        vm_period_data = extract_all_integer_periods(vm_signal, steady_info, excite_freq, SAMPLING_RATE);
+        
+        % FFT分析
+        vm_fft = fft(vm_period_data);
+        vm_fft_results(ch, :) = vm_fft;
     end
     
-    fprintf('\nVD數據範圍:\n');
-    for i = 1:6
-        fprintf('  Ch%d: %.6f ~ %.6f V\n', i, min(vd_data(i, :)), max(vd_data(i, :)));
-    end
+    % 對激勵DA通道進行相同處理
+    da_signal = da_data(excite_ch, :);
+    da_period_data = extract_all_integer_periods(da_signal, steady_info, excite_freq, SAMPLING_RATE);
+    da_fft_results = fft(da_period_data);
     
-    fprintf('\nDA數據範圍 (DAC值):\n');
-    for i = 1:6
-        fprintf('  Ch%d: %d ~ %d\n', i, round(min(da_data(i, :))), round(max(da_data(i, :))));
+    % 建立頻率軸
+    N = length(da_period_data);
+    freq_axis = (0:N-1) * SAMPLING_RATE / N;
+    
+    fprintf('開環FFT分析完成，頻率解析度: %.3f Hz\n', SAMPLING_RATE / N);
+end
+
+function [actual_freq_bin, deviation_percent] = detect_vm_frequency_deviation(vm_fft, excite_freq, freq_axis)
+    % 檢測VM信號主頻率與激勵頻率的偏差
+    %
+    % 輸入:
+    %   vm_fft - VM通道的FFT結果 (1 x N)
+    %   excite_freq - 激勵頻率 (Hz)
+    %   freq_axis - 頻率軸 (1 x N)
+    % 輸出:
+    %   actual_freq_bin - 實際使用的頻率bin
+    %   deviation_percent - 頻率偏差百分比
+    
+    % 計算理論頻率bin
+    freq_resolution = freq_axis(2) - freq_axis(1);
+    theoretical_bin = round(excite_freq / freq_resolution) + 1;  % +1因為MATLAB索引從1開始
+    
+    % 定義搜尋範圍（±5%）
+    tolerance = VM_FREQ_TOLERANCE;
+    freq_range = excite_freq * tolerance;
+    search_bins = round(freq_range / freq_resolution);
+    
+    % 確保搜尋範圍在有效範圍內
+    start_bin = max(1, theoretical_bin - search_bins);
+    end_bin = min(length(freq_axis), theoretical_bin + search_bins);
+    
+    % 在搜尋範圍內找到最大幅值
+    search_range = start_bin:end_bin;
+    [~, max_idx] = max(abs(vm_fft(search_range)));
+    actual_freq_bin = search_range(max_idx);
+    
+    % 計算偏差
+    actual_freq = freq_axis(actual_freq_bin);
+    deviation_percent = abs(actual_freq - excite_freq) / excite_freq * 100;
+    
+    % 檢查偏差是否超過容差
+    if deviation_percent > tolerance * 100
+        fprintf('警告: 頻率偏差 %.1f%% 超過容差 %.1f%%\n', deviation_percent, tolerance * 100);
     end
 end
 
+function [magnitude_db, phase_diff] = calculate_vm_da_ratio(vm_fft, da_fft, freq_bin)
+    % 計算開環傳遞函數 H(jω) = VM(jω) / DA(jω)
+    %
+    % 輸入:
+    %   vm_fft - VM通道的FFT結果 (1 x N)
+    %   da_fft - DA通道的FFT結果 (1 x N)
+    %   freq_bin - 目標頻率的bin索引
+    % 輸出:
+    %   magnitude_db - 大小比值（dB）
+    %   phase_diff - 相位差（度數）
+    
+    % 提取複數值
+    vm_complex = vm_fft(freq_bin);
+    da_complex = da_fft(freq_bin);
+    
+    % 檢查DA信號是否足夠大
+    da_magnitude = abs(da_complex);
+    if da_magnitude < MIN_DA_THRESHOLD
+        fprintf('警告: DA信號幅值太小 (%.2e)，設為零\n', da_magnitude);
+        magnitude_db = -Inf;  % dB尺度下的零
+        phase_diff = 0;
+        return;
+    end
+    
+    % 計算傳遞函數
+    transfer_function = vm_complex / da_complex;
+    
+    % 提取大小和相位
+    magnitude_linear = abs(transfer_function);
+    magnitude_db = 20 * log10(magnitude_linear);  % 轉換為dB
+    phase_diff = angle(transfer_function) * 180 / pi;  % 轉換為度數
+end
+
+%% ===== 利用FFT結果繪製open loop Bode plot 的function
+function plot_openloop_bode_diagram_vertical(frequencies, magnitudes_db, phases)
+    % 繪製6通道垂直排列的開環波德圖
+    %
+    % 輸入:
+    %   frequencies - 頻率點 (1 x N)
+    %   magnitudes_db - 6通道大小數據 dB (6 x N)
+    %   phases - 6通道相位數據 (6 x N)
+    
+    if isempty(frequencies)
+        error('沒有數據可繪製');
+    end
+    
+    fprintf('繪製開環波德圖...\n');
+    
+    % 創建圖形窗口
+    figure('Name', '6通道開環波德圖 (VM/DA)', 'Position', [100, 100, 1200, 800]);
+    
+    % 定義6通道顏色
+    colors = CHANNEL_COLORS;
+    
+    % 上圖：大小響應（dB尺度）
+    subplot(2, 1, 1);
+    hold on;
+    
+    for ch = 1:6
+        % 使用對數頻率軸和dB大小
+        semilogx(frequencies, magnitudes_db(ch, :), ...
+                'Color', colors(ch), 'LineWidth', 2, 'Marker', 'o', ...
+                'MarkerSize', 6, 'DisplayName', sprintf('CH%d', ch));
+    end
+    
+    % 設定上圖屬性
+    xlabel('頻率 (Hz)');
+    ylabel('大小 (dB)');
+    title('開環波德圖 - 大小響應 (VM/DA)');
+    legend('Location', 'best');
+    grid on;
+    grid minor;
+    hold off;
+    
+    % 設定合理的Y軸範圍
+    finite_mags = magnitudes_db(isfinite(magnitudes_db));
+    if ~isempty(finite_mags)
+        y_min = min(finite_mags);
+        y_max = max(finite_mags);
+        if y_max > y_min
+            ylim([y_min - 5, y_max + 5]);  % dB範圍留5dB餘量
+        end
+    end
+    
+    % 下圖：相位響應
+    subplot(2, 1, 2);
+    hold on;
+    
+    for ch = 1:6
+        % 使用對數頻率軸
+        semilogx(frequencies, phases(ch, :), ...
+                'Color', colors(ch), 'LineWidth', 2, 'Marker', 's', ...
+                'MarkerSize', 6, 'DisplayName', sprintf('CH%d', ch));
+    end
+    
+    % 設定下圖屬性
+    xlabel('頻率 (Hz)');
+    ylabel('相位 (度)');
+    title('開環波德圖 - 相位響應 (VM/DA)');
+    legend('Location', 'best');
+    grid on;
+    grid minor;
+    hold off;
+    
+    % 設定相位軸範圍
+    ylim([-180, 180]);
+    
+    % 添加相位參考線
+    yline(0, '--k', 'Alpha', 0.3);
+    yline(90, '--k', 'Alpha', 0.3);
+    yline(-90, '--k', 'Alpha', 0.3);
+    
+    % 整體佈局調整
+    sgtitle('6通道開環波德圖分析結果 (VM/DA)', 'FontSize', 14, 'FontWeight', 'bold');
+    
+    % 顯示統計信息
+    fprintf('開環波德圖統計信息:\n');
+    fprintf('頻率範圍: %.1f - %.1f Hz\n', min(frequencies), max(frequencies));
+    finite_mags = magnitudes_db(isfinite(magnitudes_db));
+    if ~isempty(finite_mags)
+        fprintf('大小範圍: %.1f - %.1f dB\n', min(finite_mags), max(finite_mags));
+    end
+    fprintf('相位範圍: %.1f - %.1f 度\n', min(phases(:)), max(phases(:)));
+    
+    fprintf('開環波德圖繪製完成！\n');
+end
+
+%% ===== 週期處理 =====
+    %使用經過前面(main)中 load and clean 的資料作為輸入
+    %這裡僅放如何使用的程式
+    period_samples = round(SAMPLING_RATE / TARGET_FREQ);
+    total_periods = floor(size(vm_clean, 2) / period_samples);
+    
+    fprintf('Samples per period: %d | Total periods: %d\n', period_samples, total_periods);
+    
+    % 檢查週期範圍
+    if END_PERIOD > total_periods
+        fprintf('警告: 結束週期超出範圍，調整為第%d週期\n', total_periods);
+        END_PERIOD = total_periods;
+    end
+    
+    if START_PERIOD < 1
+        fprintf('警告: 開始週期調整為第1週期\n');
+        START_PERIOD = 1;
+    end
+    
+    if START_PERIOD > END_PERIOD
+        fprintf('錯誤: 開始週期大於結束週期\n');
+        return;
+    end
+    
+    DISPLAY_PERIODS = END_PERIOD - START_PERIOD + 1;
+    fprintf('Display: Period %d-%d (Total %d periods)\n', START_PERIOD, END_PERIOD, DISPLAY_PERIODS);
+%% ===== 繪製指定週期範圍的信號圖表 =====
+function plot_signal_range(data, signal_type, target_freq, sampling_rate, start_period, end_period, channels)
+    % 繪製指定週期範圍的信號圖表
+    
+    period_samples = round(sampling_rate / target_freq);
+    start_idx = (start_period - 1) * period_samples + 1;
+    end_idx = end_period * period_samples;
+    
+    if end_idx > size(data, 2)
+        end_idx = size(data, 2);
+    end
+    
+    display_data = data(channels, start_idx:end_idx);
+    time_axis = (start_idx-1:end_idx-1) / sampling_rate;
+    
+    figure('Name', sprintf('%s - 週期%d-%d', signal_type, start_period, end_period));
+    
+    colors = ['b', 'r', 'g', 'm', 'c', 'k'];
+    for i = 1:length(channels)
+        plot(time_axis, display_data(i, :), 'Color', colors(mod(i-1, 6)+1), 'LineWidth', 2.5);
+        hold on;
+    end
+    
+    xlabel('Time (s)', 'FontSize', 12, 'FontWeight', 'bold');
+    ylabel('Voltage (V)', 'FontSize', 12, 'FontWeight', 'bold');
+    title(sprintf('%s Signal - %dHz (Period %d-%d)', signal_type, target_freq, start_period, end_period), ...
+          'FontSize', 14, 'FontWeight', 'bold');
+    
+    % 加粗座標軸數字
+    set(gca, 'FontWeight', 'bold', 'FontSize', 14);
+    
+    % 加上簡單的顏色標示，圖例移到標題左方
+    legend_labels = {};
+    for i = 1:length(channels)
+        legend_labels{i} = sprintf('Ch%d', channels(i));
+    end
+    h_legend = legend(legend_labels, 'Location', 'northwest', 'FontSize', 11, 'FontWeight', 'bold');
+    h_legend.LineWidth = 2.5;  % 圖例線條加粗
+    
+    grid on;
+    hold off;
+end
+
+%% ===== 繪製指定週期範圍的VM與DA疊圖 =====
+function plot_overlay_range(vm_data, da_data, target_freq, sampling_rate, start_period, end_period, channels)
+    % 繪製指定週期範圍的VM與DA疊圖
+    
+    period_samples = round(sampling_rate / target_freq);
+    start_idx = (start_period - 1) * period_samples + 1;
+    end_idx = end_period * period_samples;
+    
+    if end_idx > size(vm_data, 2)
+        end_idx = size(vm_data, 2);
+    end
+    
+    vm_display = vm_data(channels, start_idx:end_idx);
+    da_display = da_data(channels, start_idx:end_idx);
+    time_axis = (start_idx-1:end_idx-1) / sampling_rate;
+    
+    figure('Name', sprintf('VM & DA Overlay - Period %d-%d', start_period, end_period));
+    
+    for i = 1:length(channels)
+        subplot(length(channels), 1, i);
+        plot(time_axis, vm_display(i, :), 'b-', 'LineWidth', 2.5, 'DisplayName', 'VM');
+        hold on;
+        plot(time_axis, da_display(i, :), 'r-', 'LineWidth', 2.5, 'DisplayName', 'DA');
+        
+        ylabel('Voltage (V)', 'FontSize', 12, 'FontWeight', 'bold');
+        title(sprintf('Channel %d', channels(i)), 'FontSize', 13, 'FontWeight', 'bold');
+        
+        % 加粗座標軸數字
+        set(gca, 'FontWeight', 'bold', 'FontSize', 14);
+        
+        h_legend = legend('VM', 'DA', 'Location', 'northwest', 'FontSize', 11, 'FontWeight', 'bold');
+        h_legend.LineWidth = 2.5;  % 圖例線條加粗
+        grid on;
+        hold off;
+        
+        if i == length(channels)
+            xlabel('Time (s)', 'FontSize', 14, 'FontWeight', 'bold');
+        end
+    end
+end
+
+%% ===== 繪製指定週期的VM vs VD相位圖 =====
+function plot_phase_range(vm_data, vd_data, target_freq, sampling_rate, start_period, channels)
+    % 繪製指定週期的VM vs VD相位圖
+    
+    period_samples = round(sampling_rate / target_freq);
+    start_idx = (start_period - 1) * period_samples + 1;
+    end_idx = start_period * period_samples;
+    
+    if end_idx > size(vm_data, 2)
+        fprintf('警告: 指定週期超出數據範圍\n');
+        return;
+    end
+    
+    figure('Name', sprintf('VM vs VD Phase Plot - Period %d', start_period));
+    
+    colors = ['b', 'r', 'g', 'm', 'c', 'k'];
+    legend_labels = {};
+    
+    for i = 1:length(channels)
+        ch = channels(i);
+        
+        vm_period = vm_data(ch, start_idx:end_idx);
+        vd_period = vd_data(ch, start_idx:end_idx);
+        
+        plot(vd_period, vm_period, 'Color', colors(mod(i-1, 6)+1), 'LineWidth', 2.5);
+        legend_labels{i} = sprintf('Ch%d', ch);
+        hold on;
+    end
+    
+    xlabel('VD Voltage (V)', 'FontSize', 12, 'FontWeight', 'bold');
+    ylabel('VM Voltage (V)', 'FontSize', 12, 'FontWeight', 'bold');
+    title(sprintf('VM vs VD Phase Plot - Period %d', start_period), 'FontSize', 14, 'FontWeight', 'bold');
+    
+    % 加粗座標軸數字
+    set(gca, 'FontWeight', 'bold', 'FontSize', 14);
+    
+    h_legend = legend(legend_labels, 'Location', 'northwest', 'FontSize', 11, 'FontWeight', 'bold');
+    h_legend.LineWidth = 2.5;  % 圖例線條加粗
+    grid on;
+    axis equal;
+    hold off;
+end
 %% ===== 使用範例（乾淨數據版本）=====
 
 % 範例1: 基本使用（完整流程）
@@ -468,7 +1002,29 @@ end
 % 範例7: 週期平均分析
 % period_data = extract_period_average(vm, steady, 10, 3);  % 通道3的10週期平均
 
-%% ===== 實用工具函數 =====
+%% ===== 實用工具函數(各函數皆可分開使用) =====
+function show_data_info(vm_data, vd_data, da_data)
+    % 顯示數據基本信息
+    
+    fprintf('\n=== 數據信息 ===\n');
+    fprintf('數據長度: %d 樣本點\n', size(vm_data, 2));
+    fprintf('採樣時間: %.3f 秒\n', size(vm_data, 2) / 100000);
+    
+    fprintf('\nVM數據範圍:\n');
+    for i = 1:6
+        fprintf('  Ch%d: %.6f ~ %.6f V\n', i, min(vm_data(i, :)), max(vm_data(i, :)));
+    end
+    
+    fprintf('\nVD數據範圍:\n');
+    for i = 1:6
+        fprintf('  Ch%d: %.6f ~ %.6f V\n', i, min(vd_data(i, :)), max(vd_data(i, :)));
+    end
+    
+    fprintf('\nDA數據範圍 (DAC值):\n');
+    for i = 1:6
+        fprintf('  Ch%d: %d ~ %d\n', i, round(min(da_data(i, :))), round(max(da_data(i, :))));
+    end
+end
 
 function [vm, vd, da_volt, steady_info] = load_and_process_hsdata(csv_filepath, target_freq, varargin)
     % 整合HSData讀取、清理、轉換和穩態檢測的完整流程
@@ -535,4 +1091,62 @@ function stable_data = extract_stable_data(clean_data, steady_info, num_periods,
     end_idx = start_idx + num_periods * period_samples - 1;
     
     stable_data = clean_data(channels, start_idx:end_idx);
+end
+
+function nominal_freq = extract_nominal_frequency(filename)
+% 從檔案名提取標稱頻率
+% 例如: P5_100.csv -> 100, P5_0.1.csv -> 0.1
+
+nominal_freq = [];
+
+% 使用正則表達式提取數字
+pattern = '_([0-9]*\.?[0-9]+)\.csv';
+match = regexp(filename, pattern, 'tokens');
+
+if ~isempty(match)
+    freq_str = match{1}{1};
+    nominal_freq = str2double(freq_str);
+    
+    % 確認提取的頻率是合理的（0.01 Hz 到 10000 Hz）
+    if isnan(nominal_freq) || nominal_freq < 0.01 || nominal_freq > 10000
+        nominal_freq = [];
+    end
+end
+end
+
+function magnitudes_normalized = normalize_magnitudes(magnitudes_db, frequencies)
+% 正規化大小數據 - 每個通道以最低頻為基準
+% 輸入: magnitudes_db (6 x N), frequencies (1 x N)
+% 輸出: magnitudes_normalized (6 x N)
+
+if isempty(magnitudes_db) || isempty(frequencies)
+    magnitudes_normalized = magnitudes_db;
+    return;
+end
+
+% 找到最低頻率的索引
+[~, min_freq_idx] = min(frequencies);
+
+magnitudes_normalized = zeros(size(magnitudes_db));
+
+fprintf('正規化參考點：%.2f Hz\n', frequencies(min_freq_idx));
+
+% 對每個通道進行正規化
+for ch = 1:6
+    reference_value = magnitudes_db(ch, min_freq_idx);
+    
+    % 檢查參考值是否有效
+    if isfinite(reference_value)
+        % 正規化：每個頻率的dB值減去最低頻的dB值
+        magnitudes_normalized(ch, :) = magnitudes_db(ch, :) - reference_value;
+        
+        fprintf('  CH%d: 參考值 = %.2f dB\n', ch, reference_value);
+    else
+        % 如果參考值無效，保持原值
+        magnitudes_normalized(ch, :) = magnitudes_db(ch, :);
+        fprintf('  CH%d: 參考值無效，保持原始數據\n', ch);
+    end
+end
+
+fprintf('正規化完成！最低頻率處所有通道都成為 0 dB 參考點\n');
 end

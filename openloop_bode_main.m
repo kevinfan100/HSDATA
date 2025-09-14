@@ -146,7 +146,7 @@ for i = 1:length(csv_files)
             freq_resolution = freq_axis(2) - freq_axis(1);
             target_bin = round(excite_freq / freq_resolution) + 1;
             
-            % 計算傳遞函數
+            % 計算轉移函數
             vm_complex = vm_fft(target_bin);
             da_complex = da_fft(target_bin);
             
@@ -161,26 +161,25 @@ for i = 1:length(csv_files)
             end
         end
         
-        % 從檔案名提取標稱頻率
-        nominal_freq = extract_nominal_frequency(csv_file.name);
-        if ~isempty(nominal_freq)
-            display_freq = nominal_freq;  % 使用標稱頻率顯示
-        else
-            display_freq = excite_freq;   % 回退到檢測頻率
-        end
-        
-        % 添加到結果
-        frequencies(end+1) = display_freq;
-        magnitudes_db(:, end+1) = current_magnitudes_db;
-        phases(:, end+1) = current_phases;
-        excitation_channels(end+1) = excite_ch; % 記錄激勵通道
-        
-        fprintf('  ✓ 分析完成：頻率 %.1f Hz\n', excite_freq);
-        
-    catch ME
-        fprintf('  ✗ 處理失敗: %s\n', ME.message);
-        continue;
+function nominal_freq = extract_nominal_frequency(filename)
+% 從檔案名提取標稱頻率
+% 例如: P5_100.csv -> 100, P5_0.1.csv -> 0.1
+
+nominal_freq = [];
+
+% 使用正則表達式提取數字
+pattern = '_([0-9]*\.?[0-9]+)\.csv';
+match = regexp(filename, pattern, 'tokens');
+
+if ~isempty(match)
+    freq_str = match{1}{1};
+    nominal_freq = str2double(freq_str);
+    
+    % 確認提取的頻率是合理的（0.01 Hz 到 10000 Hz）
+    if isnan(nominal_freq) || nominal_freq < 0.01 || nominal_freq > 10000
+        nominal_freq = [];
     end
+end
 end
 
 % 排序結果

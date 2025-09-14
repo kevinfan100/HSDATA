@@ -93,6 +93,7 @@ function run_analysis()
     fprintf('Analysis completed!\n');
 end
 
+% 可從HSDataTemplate.m 得到完整的function 使用
 function [vm_clean, vd_clean, da_clean] = load_and_clean_data(csv_filepath)
     % 簡化的數據讀取和清理函數
     
