@@ -1,22 +1,20 @@
 function openloop_bode_main(varargin)
-% 開環波德圖分析主函數 - 修復版本
-% 
-% 使用方法:
-%   openloop_bode_main()                     % 使用預設資料夾
-%   openloop_bode_main('custom_folder/')     % 使用自訂資料夾
 
-fprintf('=== 開環波德圖分析系統（修復版）===\n');
+% 清空命令窗口
+clc;
 
 % 配置參數
-SAMPLING_RATE = 100000;
-VM_FREQ_TOLERANCE = 0.05;
-MIN_DA_THRESHOLD = 1e-10;
-DATA_FOLDER = '01Data\02Processed_csv\openloop_Cali_P5';
-CONSECUTIVE_PERIODS = 2;
-CHECK_POINTS = 5;
-STABILITY_THRESHOLD = 1e-3;  % 穩態檢測閾值 - 可調整 (越小越嚴格)
-START_PERIOD = 1;
-USE_ADVANCED_STEADY_DETECTION = true;  % 使用進階穩態檢測 (false=使用簡化版)
+SAMPLING_RATE = 100000;              % 採樣率 (Hz)
+MIN_DA_THRESHOLD = 1e-10;           % DA信號最小閾值
+DATA_FOLDER = 'C:\Users\PME406_01\Desktop\code\HSDATA\01Data\02Processed_csv\openloop_Cali_P5';
+
+% 穩態檢測參數
+STABILITY_THRESHOLD = 1e-3;          % 穩定性閾值 (1mV)
+CONSECUTIVE_PERIODS = 2;             % 需要連續穩定的週期數
+CHECK_POINTS = 5;                    % 每週期的檢查點數
+START_PERIOD = 1;                    % 開始檢測的週期
+
+% 顯示設定
 CHANNEL_COLORS = ['k','b','g','r','m','c'];  % 黑藍綠紅紫淺藍
 DISPLAY_CHANNELS = [1,2,3,4,5,6];          % 控制要顯示的通道，可方便調整
 
@@ -43,7 +41,6 @@ end
 
 fprintf('找到 %d 個CSV檔案\n', length(csv_files));
 
-% 初始化結果陣列
 frequencies = [];
 magnitudes_db = zeros(6, 0);
 phases = zeros(6, 0);
@@ -81,14 +78,71 @@ for i = 1:length(csv_files)
             end
         end
         
-        % 清理數據（排除每10000個樣本點）
-        fprintf('  步驟2: 清理數據...\n');
-        exclude_indices = 1:10000:data_length;
-        valid_mask = true(1, data_length);
-        valid_mask(exclude_indices) = false;
-        
-        vm_clean = vm_data(:, valid_mask);
-        da_clean = da_data(:, valid_mask);
+        % 修復數據
+        fprintf('  步驟2: 修復數據（高級插值法）...\n');
+        bad_indices = 1:10000:data_length;
+        num_bad_points = length(bad_indices);
+
+        % 'linear' - 線性插值（簡單快速）
+        % 'spline' - 樣條插值（最平滑，適合週期性信號）
+        % 'pchip' - 分段三次Hermite插值（保形，避免過衝）
+        % 'makima' - 修正Akima插值（平衡平滑度和穩定性）
+        interpolation_method = 'makima';  % 可修改此處來對比不同方法
+
+        fprintf('    使用插值方法: %s\n', interpolation_method);
+
+        % 複製原始數據（不改變大小）
+        vm_clean = vm_data;
+        da_clean = da_data;
+
+        % 保存原始壞點值用於對比
+        vm_bad_original = vm_data(:, bad_indices);
+        da_bad_original = da_data(:, bad_indices);
+
+        % 使用高級插值方法
+        if num_bad_points > 0
+            % 找出好的數據點索引
+            good_indices = setdiff(1:data_length, bad_indices);
+
+            % 對每個通道進行插值
+            for ch = 1:6
+                % 確保有足夠的好點進行插值
+                if length(good_indices) >= 4
+                    % 使用選定的插值方法
+                    try
+                        vm_clean(ch, bad_indices) = interp1(good_indices, ...
+                            vm_data(ch, good_indices), bad_indices, interpolation_method, 'extrap');
+                        da_clean(ch, bad_indices) = interp1(good_indices, ...
+                            da_data(ch, good_indices), bad_indices, interpolation_method, 'extrap');
+                    catch
+                        % 如果高級插值失敗，降級到線性插值
+                        fprintf('    警告: 通道%d插值失敗，使用線性插值\n', ch);
+                        vm_clean(ch, bad_indices) = interp1(good_indices, ...
+                            vm_data(ch, good_indices), bad_indices, 'linear', 'extrap');
+                        da_clean(ch, bad_indices) = interp1(good_indices, ...
+                            da_data(ch, good_indices), bad_indices, 'linear', 'extrap');
+                    end
+                else
+                    % 數據點太少，使用簡單線性插值
+                    for idx = bad_indices
+                        if idx > 1 && idx < data_length
+                            vm_clean(ch, idx) = (vm_data(ch, idx-1) + vm_data(ch, idx+1)) / 2;
+                            da_clean(ch, idx) = (da_data(ch, idx-1) + da_data(ch, idx+1)) / 2;
+                        end
+                    end
+                end
+            end
+
+            % 計算插值修復的統計信息
+            vm_error_rms = sqrt(mean((vm_clean(:, bad_indices) - vm_bad_original).^2, 2));
+            da_error_rms = sqrt(mean((da_clean(:, bad_indices) - da_bad_original).^2, 2));
+
+            % 顯示修復效果統計
+            fprintf('    VM修復RMS差異: %.6f V (平均)\n', mean(vm_error_rms));
+            fprintf('    DA修復RMS差異: %.6f V (平均)\n', mean(da_error_rms));
+        end
+
+        fprintf('    原始數據點: %d, 修復壞點: %d\n', data_length, num_bad_points);
         
         % 轉換DA為電壓
         da_volt = (da_clean - 32768) * (20.0 / 65536);
@@ -100,11 +154,8 @@ for i = 1:length(csv_files)
         
         % 穩態檢測 - 根據設定選擇檢測方法
         fprintf('  步驟4: 穩態檢測...\n');
-        if USE_ADVANCED_STEADY_DETECTION
-            steady_info = detect_steady_state_advanced(vm_clean, excite_freq, SAMPLING_RATE, STABILITY_THRESHOLD);
-        else
-            steady_info = detect_steady_state_simple(vm_clean(1,:), excite_freq, SAMPLING_RATE);
-        end
+        steady_info = detect_steady_state_advanced(vm_clean, excite_freq, SAMPLING_RATE, ...
+            STABILITY_THRESHOLD, CONSECUTIVE_PERIODS, CHECK_POINTS, START_PERIOD);
 
         if isempty(steady_info)
             fprintf('  ✗ 穩態檢測失敗，跳過此檔案\n');
@@ -211,27 +262,6 @@ end
 
 end
 
-function nominal_freq = extract_nominal_frequency(filename)
-% 從檔案名提取標稱頻率
-% 例如: P5_100.csv -> 100, P5_0.1.csv -> 0.1
-
-nominal_freq = [];
-
-% 使用正則表達式提取數字
-pattern = '_([0-9]*\.?[0-9]+)\.csv';
-match = regexp(filename, pattern, 'tokens');
-
-if ~isempty(match)
-    freq_str = match{1}{1};
-    nominal_freq = str2double(freq_str);
-    
-    % 確認提取的頻率是合理的（0.01 Hz 到 10000 Hz）
-    if isnan(nominal_freq) || nominal_freq < 0.01 || nominal_freq > 10000
-        nominal_freq = [];
-    end
-end
-end
-
 function magnitudes_normalized = normalize_magnitudes(magnitudes_db, frequencies)
 % 正規化大小數據 - 每個通道以最低頻為基準
 % 輸入: magnitudes_db (6 x N), frequencies (1 x N)
@@ -306,34 +336,11 @@ excite_ch = best_channel;
 excite_freq = best_freq;
 end
 
-function steady_info = detect_steady_state_simple(vm_signal, target_freq, sampling_rate)
-% 簡化的穩態檢測 - 原始版本
-period_samples = round(sampling_rate / target_freq);
-max_periods = floor(length(vm_signal) / period_samples);
-
-if max_periods < 5
-    steady_info = [];
-    return;
-end
-
-% 使用後半段作為穩態
-steady_period = max(1, max_periods - 3);
-steady_info = struct('period', steady_period, ...
-                    'index', steady_period * period_samples + 1, ...
-                    'max_periods', max_periods, ...
-                    'period_samples', period_samples);
-end
-
-function steady_info = detect_steady_state_advanced(vm_signal, target_freq, sampling_rate, stability_threshold)
+function steady_info = detect_steady_state_advanced(vm_signal, target_freq, sampling_rate, ...
+    stability_threshold, consecutive_periods, check_points, start_period)
 % 改進的穩態檢測 - 基於 HSDataTemplate 的方法
 % 對多個VM通道進行穩態檢測，選擇最保守的結果
-
-% 參數設定
-CONSECUTIVE_PERIODS = 2;  % 連續穩定週期數
-CHECK_POINTS = 5;         % 每週期檢查點數
-STABILITY_THRESHOLD = stability_threshold;  % 使用傳入的穩定性閾值
-START_PERIOD = 1;         % 開始檢測的週期數
-
+% 所有參數從主程式傳入
 % 如果輸入是單一通道，轉為矩陣格式
 if isvector(vm_signal)
     vm_clean = vm_signal(:)';  % 確保是行向量
@@ -347,14 +354,21 @@ clean_length = size(vm_clean, 2);
 % 計算週期相關參數
 period_samples = round(sampling_rate / target_freq);
 max_periods = floor(clean_length / period_samples);
-check_positions = round(linspace(1, period_samples, CHECK_POINTS));
+check_positions = round(linspace(1, period_samples, check_points));
 
 fprintf('    週期樣本數: %d，最大週期數: %d\n', period_samples, max_periods);
 
 if max_periods < 5
-    % 如果數據不足，使用簡化方法
-    fprintf('    警告: 數據不足，使用簡化穩態檢測\n');
-    steady_period = max(1, max_periods - 3);
+    % 數據不足，使用最後一個週期
+    fprintf('    ⚠ 警告: 週期數不足（只有%d個），使用最後1個週期作為穩態\n', max_periods);
+    fprintf('    ⚠ 此數據可能包含暫態響應，結果可靠性較低！\n');
+
+    % 使用最後一個完整週期
+    steady_period = max_periods - 1;  % 最後一個週期的起始
+    if steady_period < 1
+        steady_period = 1;  % 至少要有一個週期
+    end
+
     steady_info = struct('period', steady_period, ...
                         'index', steady_period * period_samples + 1, ...
                         'max_periods', max_periods, ...
@@ -369,11 +383,11 @@ for vm_ch = 1:6
     signal = vm_clean(vm_ch, :);
 
     % 測試從start_period開始的每個週期
-    for test_period = START_PERIOD:(max_periods - CONSECUTIVE_PERIODS)
+    for test_period = start_period:(max_periods - consecutive_periods)
         all_stable = true;
 
         % 檢查連續週期的穩定性
-        for i = 1:CONSECUTIVE_PERIODS
+        for i = 1:consecutive_periods
             current_period = test_period + i - 1;
             next_period = current_period + 1;
 
@@ -397,7 +411,7 @@ for vm_ch = 1:6
             end
 
             % 如果差異超過閾值，標記為不穩定
-            if max_diff >= STABILITY_THRESHOLD
+            if max_diff >= stability_threshold
                 all_stable = false;
                 break;
             end
@@ -424,9 +438,12 @@ if ~isempty(steady_periods)
 
     fprintf('    穩態檢測成功: 第%d週期，索引%d\n', recommended_period, clean_index);
 else
-    % 如果未找到穩定週期，使用備用方法
-    fprintf('    警告: 未找到穩定週期，使用備用方法\n');
-    steady_period = max(1, max_periods - 3);
+    % 如果未找到穩定週期，使用最後的週期
+    fprintf('    ⚠ 警告: 未找到符合穩定條件的週期（閾值%.4fV）\n', stability_threshold);
+    fprintf('    ⚠ 使用最後%d個週期作為穩態（可能不夠穩定）\n', consecutive_periods);
+
+    % 使用最後幾個週期
+    steady_period = max(1, max_periods - consecutive_periods);
     steady_info = struct('period', steady_period, ...
                         'index', steady_period * period_samples + 1, ...
                         'max_periods', max_periods, ...
@@ -476,18 +493,9 @@ for ch = display_channels
         legend_text = sprintf('P%d (N/A)', ch);
     end
     
-    % === P4通道特殊處理：排除最後一個頻率點 ===
-    if ch == 4 && length(frequencies) > 1
-        % P4通道排除最後一個點
-        freq_plot = frequencies(1:end-1);
-        mag_plot = magnitudes_db(ch, 1:end-1);
-        fprintf('P4通道排除最後一個頻率點: %.2f Hz\n', frequencies(end));
-    else
-        % 其他通道正常繪製
-        freq_plot = frequencies;
-        mag_plot = magnitudes_db(ch, :);
-    end
-    % === P4通道特殊處理結束 ===
+    % 正常繪製所有通道
+    freq_plot = frequencies;
+    mag_plot = magnitudes_db(ch, :);
     
     semilogx(freq_plot, mag_plot, ...
             'Color', colors(ch), 'LineWidth', 2, 'Marker', 'o', ...
@@ -557,17 +565,9 @@ for ch = display_channels
         legend_text = sprintf('P%d (N/A)', ch);
     end
     
-    % === P4通道特殊處理：排除最後一個頻率點 ===
-    if ch == 4 && length(frequencies) > 1
-        % P4通道排除最後一個點
-        freq_plot = frequencies(1:end-1);
-        phase_plot = phases_processed(ch, 1:end-1);
-    else
-        % 其他通道正常繪製
-        freq_plot = frequencies;
-        phase_plot = phases_processed(ch, :);
-    end
-    % === P4通道特殊處理結束 ===
+    % 正常繪製所有通道
+    freq_plot = frequencies;
+    phase_plot = phases_processed(ch, :);
     
     semilogx(freq_plot, phase_plot, ...
             'Color', colors(ch), 'LineWidth', 2, 'Marker', 'o', ...
