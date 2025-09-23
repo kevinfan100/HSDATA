@@ -5,3 +5,4 @@ __pycache__/
 *.log
 *.dat
 *.csv
+hsdata_reader.py

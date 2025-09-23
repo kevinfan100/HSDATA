@@ -9,14 +9,23 @@ MIN_DA_THRESHOLD = 1e-10;           % DA信號最小閾值
 DATA_FOLDER = 'C:\Users\PME406_01\Desktop\code\HSDATA\01Data\02Processed_csv\openloop_Cali_P5';
 
 % 穩態檢測參數
-STABILITY_THRESHOLD = 1e-3;          % 穩定性閾值 (1mV)
-CONSECUTIVE_PERIODS = 2;             % 需要連續穩定的週期數
-CHECK_POINTS = 5;                    % 每週期的檢查點數
+STABILITY_THRESHOLD = 3e-3;          % 穩定性閾值 (1mV)
+CONSECUTIVE_PERIODS = 3;             % 需要連續穩定的週期數
+CHECK_POINTS = 100;                    % 每週期的檢查點數
 START_PERIOD = 1;                    % 開始檢測的週期
 
 % 顯示設定
 CHANNEL_COLORS = ['k','b','g','r','m','c'];  % 黑藍綠紅紫淺藍
 DISPLAY_CHANNELS = [1,2,3,4,5,6];          % 控制要顯示的通道，可方便調整
+
+% 穩態波形疊圖設定
+PLOT_STEADY_STATE = true;           % 是否顯示穩態疊圖
+PLOT_CHANNEL = 5;                   % 0=所有通道，1-6=特定通道
+PLOT_FREQUENCY_LIST = [1, 10];           % 只對特定頻率顯示（空=全部）例如：[50, 100, 500]
+
+% FFT分析模式
+FFT_MODE = 'averaged';               % 'full': 完整週期FFT, 'averaged': 週期平均後FFT, 'both': 同時計算並比較
+COMPARE_FFT_METHODS = false;         % 是否比較兩種FFT方法的結果
 
 % 解析輸入參數
 if nargin > 0
@@ -79,7 +88,7 @@ for i = 1:length(csv_files)
         end
         
         % 修復數據
-        fprintf('  步驟2: 修復數據（高級插值法）...\n');
+        fprintf('  步驟2: ...\n');
         bad_indices = 1:10000:data_length;
         num_bad_points = length(bad_indices);
 
@@ -87,7 +96,7 @@ for i = 1:length(csv_files)
         % 'spline' - 樣條插值（最平滑，適合週期性信號）
         % 'pchip' - 分段三次Hermite插值（保形，避免過衝）
         % 'makima' - 修正Akima插值（平衡平滑度和穩定性）
-        interpolation_method = 'makima';  % 可修改此處來對比不同方法
+        interpolation_method = 'spline';  % 可修改此處來對比不同方法
 
         fprintf('    使用插值方法: %s\n', interpolation_method);
 
@@ -116,7 +125,7 @@ for i = 1:length(csv_files)
                             da_data(ch, good_indices), bad_indices, interpolation_method, 'extrap');
                     catch
                         % 如果高級插值失敗，降級到線性插值
-                        fprintf('    警告: 通道%d插值失敗，使用線性插值\n', ch);
+                        fprintf('    警告: 通道%d插值失敗 使用線性插值\n', ch);
                         vm_clean(ch, bad_indices) = interp1(good_indices, ...
                             vm_data(ch, good_indices), bad_indices, 'linear', 'extrap');
                         da_clean(ch, bad_indices) = interp1(good_indices, ...
@@ -163,57 +172,158 @@ for i = 1:length(csv_files)
         end
 
         fprintf('    穩態起始點: 第%d個週期\n', steady_info.period);
-        
+
+        % 繪製穩態波形疊圖（如果啟用）
+        if PLOT_STEADY_STATE && should_plot_frequency(excite_freq, PLOT_FREQUENCY_LIST)
+            plot_steady_state_overlay(vm_clean, da_volt, steady_info, excite_ch, ...
+                excite_freq, CONSECUTIVE_PERIODS, PLOT_CHANNEL, SAMPLING_RATE);
+        end
+
         % FFT分析
-        fprintf('  步驟5: FFT分析...\n');
+        fprintf('  步驟5: FFT分析 (模式: %s)...\n', FFT_MODE);
         current_magnitudes_db = zeros(6, 1);
         current_phases = zeros(6, 1);
-        
-        for ch = 1:6
-            % 提取穩態後的完整週期數據
-            vm_signal = vm_clean(ch, :);
+
+        % 使用steady_info中的週期資訊
+        period_samples = steady_info.period_samples;
+        steady_start = steady_info.index;
+        available_length = size(vm_clean, 2) - steady_start + 1;
+        available_periods = floor(available_length / period_samples);
+
+        if available_periods < 1
+            fprintf('    警告: 數據不足一個完整週期\n');
+            continue;
+        end
+
+        if strcmp(FFT_MODE, 'averaged')
+            % === 週期平均模式 ===
+            fprintf('    使用週期平均法: %d個週期\n', available_periods);
+
+            % 提取激勵通道的DA信號用於所有通道
             da_signal = da_volt(excite_ch, :);
-            
-            % 使用steady_info中的週期資訊
-            period_samples = steady_info.period_samples;
-            steady_start = steady_info.index;
-            available_length = length(vm_signal) - steady_start + 1;
-            available_periods = floor(available_length / period_samples);
-            
-            if available_periods < 1
-                fprintf('    警告: CH%d 數據不足一個完整週期\n', ch);
-                current_magnitudes_db(ch) = -Inf;
-                current_phases(ch) = 0;
-                continue;
+
+            % 提取所有週期並平均
+            vm_periods = zeros(6, available_periods, period_samples);
+            da_periods = zeros(available_periods, period_samples);
+
+            for p = 1:available_periods
+                start_idx = steady_start + (p-1) * period_samples;
+                end_idx = start_idx + period_samples - 1;
+
+                % 提取每個週期
+                for ch = 1:6
+                    vm_periods(ch, p, :) = vm_clean(ch, start_idx:end_idx);
+                end
+                da_periods(p, :) = da_signal(start_idx:end_idx);
             end
-            
-            % 提取數據
-            end_index = steady_start + available_periods * period_samples - 1;
-            vm_period_data = vm_signal(steady_start:end_index);
-            da_period_data = da_signal(steady_start:end_index);
-            
-            % FFT
-            vm_fft = fft(vm_period_data);
-            da_fft = fft(da_period_data);
-            
-            % 找到目標頻率的bin
-            N = length(vm_period_data);
-            freq_axis = (0:N-1) * SAMPLING_RATE / N;
-            freq_resolution = freq_axis(2) - freq_axis(1);
-            target_bin = round(excite_freq / freq_resolution) + 1;
-            
-            % 計算轉移函數
-            vm_complex = vm_fft(target_bin);
-            da_complex = da_fft(target_bin);
-            
-            if abs(da_complex) > MIN_DA_THRESHOLD
-                transfer_function = vm_complex / da_complex;
-                magnitude_linear = abs(transfer_function);
-                current_magnitudes_db(ch) = 20 * log10(magnitude_linear);
-                current_phases(ch) = angle(transfer_function) * 180 / pi;
-            else
-                current_magnitudes_db(ch) = -Inf;
-                current_phases(ch) = 0;
+
+            % 計算平均週期
+            vm_avg_periods = squeeze(mean(vm_periods, 2));  % 6 x period_samples
+            da_avg_period = mean(da_periods, 1);            % 1 x period_samples
+
+            % 計算週期標準差（用於評估穩定性）
+            vm_std = squeeze(std(vm_periods, 0, 2));
+            fprintf('    VM週期間標準差: %.6f (平均)\n', mean(vm_std(:)));
+
+            % 對每個通道進行FFT
+            for ch = 1:6
+                % 單週期FFT
+                vm_fft = fft(vm_avg_periods(ch, :));
+                da_fft = fft(da_avg_period);
+
+                % 對於單週期，基頻總是第2個bin
+                target_bin = 2;
+
+                % 計算轉移函數
+                vm_complex = vm_fft(target_bin);
+                da_complex = da_fft(target_bin);
+
+                if abs(da_complex) > MIN_DA_THRESHOLD
+                    transfer_function = vm_complex / da_complex;
+                    magnitude_linear = abs(transfer_function);
+                    current_magnitudes_db(ch) = 20 * log10(magnitude_linear);
+                    current_phases(ch) = angle(transfer_function) * 180 / pi;
+                else
+                    current_magnitudes_db(ch) = -Inf;
+                    current_phases(ch) = 0;
+                end
+            end
+
+            % 如果需要比較，也計算完整FFT
+            if COMPARE_FFT_METHODS
+                fprintf('    同時計算完整FFT進行比較...\n');
+                magnitudes_full = zeros(6, 1);
+                phases_full = zeros(6, 1);
+
+                for ch = 1:6
+                    % 提取完整數據
+                    end_index = steady_start + available_periods * period_samples - 1;
+                    vm_full = vm_clean(ch, steady_start:end_index);
+                    da_full = da_volt(excite_ch, steady_start:end_index);
+
+                    % 完整FFT
+                    vm_fft_full = fft(vm_full);
+                    da_fft_full = fft(da_full);
+
+                    % 找目標頻率
+                    N_full = length(vm_full);
+                    freq_res = SAMPLING_RATE / N_full;
+                    target_bin_full = round(excite_freq / freq_res) + 1;
+
+                    % 計算
+                    if abs(da_fft_full(target_bin_full)) > MIN_DA_THRESHOLD
+                        H_full = vm_fft_full(target_bin_full) / da_fft_full(target_bin_full);
+                        magnitudes_full(ch) = 20 * log10(abs(H_full));
+                        phases_full(ch) = angle(H_full) * 180 / pi;
+                    end
+                end
+
+                % 顯示比較結果
+                fprintf('    === FFT方法比較 ===\n');
+                for ch = 1:6
+                    mag_diff = current_magnitudes_db(ch) - magnitudes_full(ch);
+                    phase_diff = current_phases(ch) - phases_full(ch);
+                    fprintf('    CH%d: ΔMag=%.3f dB, ΔPhase=%.2f°\n', ch, mag_diff, phase_diff);
+                end
+            end
+
+        else
+            % === 完整FFT模式（原方法） ===
+            fprintf('    使用完整FFT法: %d個週期\n', available_periods);
+
+            for ch = 1:6
+                % 提取穩態後的完整週期數據
+                vm_signal = vm_clean(ch, :);
+                da_signal = da_volt(excite_ch, :);
+
+                % 提取數據
+                end_index = steady_start + available_periods * period_samples - 1;
+                vm_period_data = vm_signal(steady_start:end_index);
+                da_period_data = da_signal(steady_start:end_index);
+
+                % FFT
+                vm_fft = fft(vm_period_data);
+                da_fft = fft(da_period_data);
+
+                % 找到目標頻率的bin
+                N = length(vm_period_data);
+                freq_axis = (0:N-1) * SAMPLING_RATE / N;
+                freq_resolution = freq_axis(2) - freq_axis(1);
+                target_bin = round(excite_freq / freq_resolution) + 1;
+
+                % 計算轉移函數
+                vm_complex = vm_fft(target_bin);
+                da_complex = da_fft(target_bin);
+
+                if abs(da_complex) > MIN_DA_THRESHOLD
+                    transfer_function = vm_complex / da_complex;
+                    magnitude_linear = abs(transfer_function);
+                    current_magnitudes_db(ch) = 20 * log10(magnitude_linear);
+                    current_phases(ch) = angle(transfer_function) * 180 / pi;
+                else
+                    current_magnitudes_db(ch) = -Inf;
+                    current_phases(ch) = 0;
+                end
             end
         end
 
@@ -262,8 +372,9 @@ end
 
 end
 
+%% 正規化大小數據
 function magnitudes_normalized = normalize_magnitudes(magnitudes_db, frequencies)
-% 正規化大小數據 - 每個通道以最低頻為基準
+% 每個通道以最低頻為基準
 % 輸入: magnitudes_db (6 x N), frequencies (1 x N)
 % 輸出: magnitudes_normalized (6 x N)
 
@@ -299,8 +410,8 @@ end
 fprintf('正規化完成！最低頻率處所有通道都成為 0 dB 參考點\n');
 end
 
+%% 檢測激勵通道和頻率
 function [excite_ch, excite_freq] = detect_excitation(da_voltage, sampling_rate)
-% 檢測激勵通道和頻率
 best_channel = 0;
 max_energy = 0;
 best_freq = 0;
@@ -336,9 +447,9 @@ excite_ch = best_channel;
 excite_freq = best_freq;
 end
 
+%% 穩態檢測
 function steady_info = detect_steady_state_advanced(vm_signal, target_freq, sampling_rate, ...
     stability_threshold, consecutive_periods, check_points, start_period)
-% 改進的穩態檢測 - 基於 HSDataTemplate 的方法
 % 對多個VM通道進行穩態檢測，選擇最保守的結果
 % 所有參數從主程式傳入
 % 如果輸入是單一通道，轉為矩陣格式
@@ -439,8 +550,8 @@ if ~isempty(steady_periods)
     fprintf('    穩態檢測成功: 第%d週期，索引%d\n', recommended_period, clean_index);
 else
     % 如果未找到穩定週期，使用最後的週期
-    fprintf('    ⚠ 警告: 未找到符合穩定條件的週期（閾值%.4fV）\n', stability_threshold);
-    fprintf('    ⚠ 使用最後%d個週期作為穩態（可能不夠穩定）\n', consecutive_periods);
+    fprintf('    警告: 未找到符合穩定條件的週期（閾值%.4fV）\n', stability_threshold);
+    fprintf('    使用最後%d個週期作為穩態（可能不夠穩定）\n', consecutive_periods);
 
     % 使用最後幾個週期
     steady_period = max(1, max_periods - consecutive_periods);
@@ -451,8 +562,8 @@ else
 end
 end
 
+%% 繪製波德圖（幅度和相位）
 function plot_bode_results(frequencies, magnitudes_db, phases, colors, original_magnitudes_db, excitation_channels, display_channels)
-% 繪製波德圖（幅度和相位）
 
 % 處理相位數據
 phases_processed = phases;
@@ -612,4 +723,200 @@ ax.BoxStyle = 'full';
 fprintf('Bode plots completed\n');
 fprintf('Frequency range: %.2f - %.2f Hz\n', min(frequencies), max(frequencies));
 fprintf('Frequency points: %d\n', length(frequencies));
+end
+
+%% 穩態波形疊圖視覺化
+function plot_steady_state_overlay(vm_clean, da_volt, steady_info, excite_ch, ...
+    target_freq, num_periods, plot_channel, sampling_rate)
+% 繪製穩態後的波形疊圖
+% 輸入:
+%   vm_clean: VM數據 (6 x N)
+%   da_volt: DA電壓數據 (6 x N)
+%   steady_info: 穩態資訊結構
+%   excite_ch: 激勵通道
+%   target_freq: 信號頻率
+%   num_periods: 顯示週期數（來自CONSECUTIVE_PERIODS）
+%   plot_channel: 0=所有通道, 1-6=特定通道
+%   sampling_rate: 採樣率
+
+% 提取穩態資訊
+steady_start = steady_info.index;
+period_samples = steady_info.period_samples;
+max_periods = steady_info.max_periods;
+
+% 計算可用週期數
+available_from_steady = floor((size(vm_clean, 2) - steady_start + 1) / period_samples);
+periods_to_plot = min(num_periods, available_from_steady);
+
+if periods_to_plot < 1
+    fprintf('    警告: 穩態後數據不足，無法繪製疊圖\n');
+    return;
+end
+
+% 時間軸（正規化到一個週期）
+time_axis = (0:period_samples-1) / sampling_rate * 1000;  % 轉為毫秒
+time_normalized = (0:period_samples-1) / period_samples * 2 * pi;  % 正規化到0-2π
+
+% 決定要繪製的通道
+if plot_channel == 0
+    channels_to_plot = 1:6;
+else
+    channels_to_plot = plot_channel;
+end
+
+% 創建圖形
+figure('Name', sprintf('穩態波形疊圖 - %.1f Hz', target_freq), ...
+       'Position', [50, 50, 1200, 800]);
+
+% 顏色設定
+colors = lines(max(periods_to_plot, 3));  % 確保至少有3個顏色
+
+num_subplots = length(channels_to_plot);
+plot_rows = ceil(sqrt(num_subplots));
+plot_cols = ceil(num_subplots / plot_rows);
+
+for idx = 1:num_subplots
+    ch = channels_to_plot(idx);
+    subplot(plot_rows, plot_cols, idx);
+    hold on;
+
+    % 繪製每個週期的VM數據
+    legend_entries = {};
+    all_vm_data = [];  % 儲存所有週期數據
+
+    for p = 1:periods_to_plot
+        period_start = steady_start + (p-1) * period_samples;
+        period_end = period_start + period_samples - 1;
+
+        if period_end <= size(vm_clean, 2)
+            vm_data = vm_clean(ch, period_start:period_end);
+            all_vm_data(p, :) = vm_data;  % 儲存數據
+
+            % 繪製VM波形（不使用Alpha通道，改用顏色漸變）
+            color_adjusted = colors(p,:) * (0.3 + 0.7 * (p/periods_to_plot));  % 顏色漸變
+            h_vm = plot(time_axis, vm_data, '-', ...
+                       'Color', color_adjusted, ...
+                       'LineWidth', 1.5);
+            legend_entries{end+1} = sprintf('週期 %d', steady_info.period + p - 1);
+        end
+    end
+
+    % 計算實際偏差（如果有多個週期）
+    max_deviation = 0;
+    if size(all_vm_data, 1) > 1
+        baseline = all_vm_data(1, :);  % 第一個週期作為基準
+
+        for p = 2:size(all_vm_data, 1)
+            deviations = abs(all_vm_data(p, :) - baseline);
+            max_deviation = max(max_deviation, max(deviations));
+        end
+
+        % 添加參考線（基於第一個週期）
+        stability_threshold = evalin('caller', 'STABILITY_THRESHOLD');
+
+        % 畫出偏差容許範圍（淺灰色區域）
+        upper_limit = baseline + stability_threshold;
+        lower_limit = baseline - stability_threshold;
+
+        % 使用 fill 創建陰影區域
+        fill_x = [time_axis, fliplr(time_axis)];
+        fill_y = [upper_limit, fliplr(lower_limit)];
+        h_fill = fill(fill_x, fill_y, [0.8, 0.8, 0.8], ...
+                     'FaceAlpha', 0.2, 'EdgeColor', 'none');
+        uistack(h_fill, 'bottom');  % 放到最底層
+
+        % 添加閾值線（虛線）
+        plot(time_axis, baseline, 'k--', 'LineWidth', 1);
+        legend_entries{end+1} = '基準線';
+    end
+
+    % 繪製DA波形（激勵通道）
+    if ch == excite_ch || plot_channel == 0
+        % 取第一個週期的DA作為參考
+        da_start = steady_start;
+        da_end = da_start + period_samples - 1;
+
+        if da_end <= size(da_volt, 2)
+            da_data = da_volt(excite_ch, da_start:da_end);
+
+            % 創建右側Y軸
+            yyaxis right;
+            h_da = plot(time_axis, da_data, 'k-', ...
+                       'LineWidth', 2, 'DisplayName', sprintf('DA%d', excite_ch));
+            ylabel('DA電壓 (V)', 'FontWeight', 'bold');
+            set(gca, 'YColor', 'k');
+
+            % 切回左側Y軸
+            yyaxis left;
+        end
+    end
+
+    % 設定標籤和格式
+    xlabel('時間 (ms)', 'FontWeight', 'bold');
+    ylabel('VM值', 'FontWeight', 'bold');
+
+    % 設定標題與偏差標註
+    if ch == excite_ch
+        title_str = sprintf('通道 %d (excited)', ch);
+    else
+        title_str = sprintf('通道 %d', ch);
+    end
+
+    % 設定標題（暫時移除偏差標註功能）
+    title(title_str, 'FontWeight', 'bold');
+
+    grid on;
+    legend(legend_entries, 'Location', 'best', 'FontSize', 8);
+    set(gca, 'FontWeight', 'bold');
+
+    % 標註穩態檢測點
+    if p == 1
+        xline(0, 'r--', '穩態起始', 'LabelVerticalAlignment', 'top');
+    end
+end
+
+% 總標題（根據穩態狀態調整）
+% 判斷穩態檢測狀態
+consecutive_periods = evalin('caller', 'CONSECUTIVE_PERIODS');
+if steady_info.max_periods < 5
+    % 數據不足
+    status_str = ' [數據不足，使用備用]';
+    title_color = [1, 0.5, 0];  % 橙色
+elseif steady_info.period >= steady_info.max_periods - consecutive_periods
+    % 未達標準，使用備用（使用最後幾個週期）
+    status_str = ' [未達穩態標準，使用備用]';
+    title_color = 'r';  % 紅色
+else
+    % 穩態檢測成功（找到真正的穩態）
+    status_str = ' [穩態檢測成功]';
+    title_color = 'k';  % 黑色
+end
+
+sgtitle(sprintf('穩態波形疊圖 @ %.1f Hz (第%d週期開始，共%d個週期)%s', ...
+        target_freq, steady_info.period, periods_to_plot, status_str), ...
+        'FontWeight', 'bold', 'FontSize', 14, 'Color', title_color);
+
+% 添加說明文字
+annotation('textbox', [0.02, 0.02, 0.96, 0.03], ...
+          'String', sprintf('穩態檢測: 閾值=%.4f V, 連續週期=%d, 檢查點=%d', ...
+                           evalin('caller', 'STABILITY_THRESHOLD'), ...
+                           num_periods, ...
+                           evalin('caller', 'CHECK_POINTS')), ...
+          'HorizontalAlignment', 'center', ...
+          'EdgeColor', 'none', 'FontSize', 10);
+
+fprintf('    波形疊圖已顯示: %d個週期從第%d週期開始\n', ...
+        periods_to_plot, steady_info.period);
+end
+
+%% 判斷是否需要繪圖
+function should_plot = should_plot_frequency(freq, freq_list)
+% 根據頻率列表判斷是否需要繪圖
+if isempty(freq_list)
+    should_plot = true;  % 空列表表示繪製所有頻率
+else
+    % 容差範圍（考慮浮點數比較）
+    tolerance = 0.1;  % Hz
+    should_plot = any(abs(freq - freq_list) < tolerance);
+end
 end
