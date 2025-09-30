@@ -6,22 +6,22 @@ clc;
 % 配置參數
 SAMPLING_RATE = 100000;              % 採樣率 (Hz)
 MIN_DA_THRESHOLD = 1e-10;           % DA信號最小閾值
-DATA_FOLDER = 'C:\Users\PME406_01\Desktop\code\HSDATA\01Data\02Processed_csv\openloop_Cali_P5';
+DATA_FOLDER = 'C:\Users\PME406_01\Desktop\code\HSDATA\01Data\02Processed_csv\P2';
 
 % 穩態檢測參數
-STABILITY_THRESHOLD = 3e-3;          % 穩定性閾值 (1mV)
+STABILITY_THRESHOLD = 2e-3;          % 穩定性閾值
 CONSECUTIVE_PERIODS = 3;             % 需要連續穩定的週期數
-CHECK_POINTS = 100;                    % 每週期的檢查點數
+CHECK_POINTS = 50;                  % 每週期的檢查點數
 START_PERIOD = 1;                    % 開始檢測的週期
 
 % 顯示設定
-CHANNEL_COLORS = ['k','b','g','r','m','c'];  % 黑藍綠紅紫淺藍
-DISPLAY_CHANNELS = [1,2,3,4,5,6];          % 控制要顯示的通道，可方便調整
+CHANNEL_COLORS = ['k','b','g','r','m','c'];
+DISPLAY_CHANNELS = [1,2,3,4,5,6];          % 控制要顯示的通道
 
 % 穩態波形疊圖設定
 PLOT_STEADY_STATE = true;           % 是否顯示穩態疊圖
-PLOT_CHANNEL = 5;                   % 0=所有通道，1-6=特定通道
-PLOT_FREQUENCY_LIST = [1, 10];           % 只對特定頻率顯示（空=全部）例如：[50, 100, 500]
+PLOT_CHANNEL = [2];              % 0=所有通道，1-6=特定通道，[3,5]=多個通道
+PLOT_FREQUENCY_LIST = [1, 10];      % 只對特定頻率顯示（空=全部）例如：[50, 100, 500]
 
 % FFT分析模式
 FFT_MODE = 'averaged';               % 'full': 完整週期FFT, 'averaged': 週期平均後FFT, 'both': 同時計算並比較
@@ -758,15 +758,17 @@ time_axis = (0:period_samples-1) / sampling_rate * 1000;  % 轉為毫秒
 time_normalized = (0:period_samples-1) / period_samples * 2 * pi;  % 正規化到0-2π
 
 % 決定要繪製的通道
-if plot_channel == 0
+if isequal(plot_channel, 0)
     channels_to_plot = 1:6;
+elseif isvector(plot_channel) && length(plot_channel) > 1
+    channels_to_plot = plot_channel;  % 多通道陣列
 else
-    channels_to_plot = plot_channel;
+    channels_to_plot = plot_channel;  % 單一通道
 end
 
-% 創建圖形
+% 創建圖形 - 調整為更緊湊的尺寸
 figure('Name', sprintf('穩態波形疊圖 - %.1f Hz', target_freq), ...
-       'Position', [50, 50, 1200, 800]);
+       'Position', [50, 50, 1000, 700]);
 
 % 顏色設定
 colors = lines(max(periods_to_plot, 3));  % 確保至少有3個顏色
@@ -777,7 +779,8 @@ plot_cols = ceil(num_subplots / plot_rows);
 
 for idx = 1:num_subplots
     ch = channels_to_plot(idx);
-    subplot(plot_rows, plot_cols, idx);
+    % 使用 tight subplot 減少空白
+    ax = subplot(plot_rows, plot_cols, idx);
     hold on;
 
     % 繪製每個週期的VM數據
@@ -792,12 +795,12 @@ for idx = 1:num_subplots
             vm_data = vm_clean(ch, period_start:period_end);
             all_vm_data(p, :) = vm_data;  % 儲存數據
 
-            % 繪製VM波形（不使用Alpha通道，改用顏色漸變）
+            % 繪製VM波形（加粗線條）
             color_adjusted = colors(p,:) * (0.3 + 0.7 * (p/periods_to_plot));  % 顏色漸變
             h_vm = plot(time_axis, vm_data, '-', ...
                        'Color', color_adjusted, ...
-                       'LineWidth', 1.5);
-            legend_entries{end+1} = sprintf('週期 %d', steady_info.period + p - 1);
+                       'LineWidth', 2.5);
+            legend_entries{end+1} = sprintf('Period %d', steady_info.period + p - 1);
         end
     end
 
@@ -810,100 +813,82 @@ for idx = 1:num_subplots
             deviations = abs(all_vm_data(p, :) - baseline);
             max_deviation = max(max_deviation, max(deviations));
         end
-
-        % 添加參考線（基於第一個週期）
-        stability_threshold = evalin('caller', 'STABILITY_THRESHOLD');
-
-        % 畫出偏差容許範圍（淺灰色區域）
-        upper_limit = baseline + stability_threshold;
-        lower_limit = baseline - stability_threshold;
-
-        % 使用 fill 創建陰影區域
-        fill_x = [time_axis, fliplr(time_axis)];
-        fill_y = [upper_limit, fliplr(lower_limit)];
-        h_fill = fill(fill_x, fill_y, [0.8, 0.8, 0.8], ...
-                     'FaceAlpha', 0.2, 'EdgeColor', 'none');
-        uistack(h_fill, 'bottom');  % 放到最底層
-
-        % 添加閾值線（虛線）
-        plot(time_axis, baseline, 'k--', 'LineWidth', 1);
-        legend_entries{end+1} = '基準線';
     end
 
-    % 繪製DA波形（激勵通道）
-    if ch == excite_ch || plot_channel == 0
-        % 取第一個週期的DA作為參考
-        da_start = steady_start;
-        da_end = da_start + period_samples - 1;
+    % 繪製DA波形（激勵通道）- 在所有選中的通道中都顯示
+    % 取第一個週期的DA作為參考
+    da_start = steady_start;
+    da_end = da_start + period_samples - 1;
 
-        if da_end <= size(da_volt, 2)
-            da_data = da_volt(excite_ch, da_start:da_end);
+    if da_end <= size(da_volt, 2)
+        da_data = da_volt(excite_ch, da_start:da_end);
 
-            % 創建右側Y軸
-            yyaxis right;
-            h_da = plot(time_axis, da_data, 'k-', ...
-                       'LineWidth', 2, 'DisplayName', sprintf('DA%d', excite_ch));
-            ylabel('DA電壓 (V)', 'FontWeight', 'bold');
-            set(gca, 'YColor', 'k');
+        % 創建右側Y軸
+        yyaxis right;
+        h_da = plot(time_axis, da_data, 'k-', ...
+                   'LineWidth', 3, 'DisplayName', sprintf('DA%d', excite_ch));
+        ylabel('DA (V)', 'FontWeight', 'bold', 'FontSize', 16);
+        set(gca, 'YColor', 'k', 'LineWidth', 2);
 
-            % 切回左側Y軸
-            yyaxis left;
-        end
+        % 切回左側Y軸
+        yyaxis left;
     end
 
-    % 設定標籤和格式
-    xlabel('時間 (ms)', 'FontWeight', 'bold');
-    ylabel('VM值', 'FontWeight', 'bold');
+    % 設定標籤和格式（加大字體）
+    xlabel('Time (ms)', 'FontWeight', 'bold', 'FontSize', 16);
+    ylabel('VM', 'FontWeight', 'bold', 'FontSize', 16);
 
-    % 設定標題與偏差標註
+    % 設定標題
     if ch == excite_ch
-        title_str = sprintf('通道 %d (excited)', ch);
+        title_str = sprintf('Ch%d (excited)', ch);
     else
-        title_str = sprintf('通道 %d', ch);
+        title_str = sprintf('Ch%d', ch);
     end
 
-    % 設定標題（暫時移除偏差標註功能）
-    title(title_str, 'FontWeight', 'bold');
+    title(title_str, 'FontWeight', 'bold', 'FontSize', 18);
 
-    grid on;
-    legend(legend_entries, 'Location', 'best', 'FontSize', 8);
-    set(gca, 'FontWeight', 'bold');
+    grid off;
+    legend(legend_entries, 'Location', 'best', 'FontSize', 14, 'LineWidth', 1.5);
 
-    % 標註穩態檢測點
-    if p == 1
-        xline(0, 'r--', '穩態起始', 'LabelVerticalAlignment', 'top');
+    % 加粗軸線和刻度
+    set(gca, 'FontWeight', 'bold', 'FontSize', 14, 'LineWidth', 2);
+    ax.XAxis.LineWidth = 2.5;
+    ax.YAxis(1).LineWidth = 2.5;
+    if length(ax.YAxis) > 1
+        ax.YAxis(2).LineWidth = 2.5;
     end
+
+    % 加粗外框
+    box on;
+    set(gca, 'BoxStyle', 'full');
 end
 
 % 總標題（根據穩態狀態調整）
-% 判斷穩態檢測狀態
 consecutive_periods = evalin('caller', 'CONSECUTIVE_PERIODS');
 if steady_info.max_periods < 5
-    % 數據不足
-    status_str = ' [數據不足，使用備用]';
-    title_color = [1, 0.5, 0];  % 橙色
+    status_str = ' [Insufficient Data]';
+    title_color = [1, 0.5, 0];
 elseif steady_info.period >= steady_info.max_periods - consecutive_periods
-    % 未達標準，使用備用（使用最後幾個週期）
-    status_str = ' [未達穩態標準，使用備用]';
-    title_color = 'r';  % 紅色
+    status_str = ' [Fallback]';
+    title_color = 'r';
 else
-    % 穩態檢測成功（找到真正的穩態）
-    status_str = ' [穩態檢測成功]';
-    title_color = 'k';  % 黑色
+    status_str = ' [Steady Detected]';
+    title_color = 'k';
 end
 
-sgtitle(sprintf('穩態波形疊圖 @ %.1f Hz (第%d週期開始，共%d個週期)%s', ...
-        target_freq, steady_info.period, periods_to_plot, status_str), ...
-        'FontWeight', 'bold', 'FontSize', 14, 'Color', title_color);
+% 先調整子圖間距，為標題留出空間
+set(gcf, 'Units', 'normalized');
+all_axes = findobj(gcf, 'Type', 'axes');
+for i = 1:length(all_axes)
+    pos = get(all_axes(i), 'Position');
+    % 向下移動並縮小高度，為標題留空間
+    set(all_axes(i), 'Position', [pos(1), pos(2)-0.02, pos(3)*1.02, pos(4)*0.92]);
+end
 
-% 添加說明文字
-annotation('textbox', [0.02, 0.02, 0.96, 0.03], ...
-          'String', sprintf('穩態檢測: 閾值=%.4f V, 連續週期=%d, 檢查點=%d', ...
-                           evalin('caller', 'STABILITY_THRESHOLD'), ...
-                           num_periods, ...
-                           evalin('caller', 'CHECK_POINTS')), ...
-          'HorizontalAlignment', 'center', ...
-          'EdgeColor', 'none', 'FontSize', 10);
+% 設定總標題
+sgtitle(sprintf('Steady-State Overlay @ %.1f Hz (Period %d, %d cycles)%s', ...
+        target_freq, steady_info.period, periods_to_plot, status_str), ...
+        'FontWeight', 'bold', 'FontSize', 18, 'Color', title_color);
 
 fprintf('    波形疊圖已顯示: %d個週期從第%d週期開始\n', ...
         periods_to_plot, steady_info.period);
@@ -917,6 +902,7 @@ if isempty(freq_list)
 else
     % 容差範圍（考慮浮點數比較）
     tolerance = 0.1;  % Hz
-    should_plot = any(abs(freq - freq_list) < tolerance);
+    % 確保返回純量邏輯值
+    should_plot = any(abs(freq - freq_list(:)) < tolerance);
 end
 end
