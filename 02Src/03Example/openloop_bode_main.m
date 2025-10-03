@@ -6,12 +6,12 @@ clc;
 % 配置參數
 SAMPLING_RATE = 100000;              % 採樣率 (Hz)
 MIN_DA_THRESHOLD = 1e-10;           % DA信號最小閾值
-DATA_FOLDER = 'C:\Users\PME406_01\Desktop\code\HSDATA\01Data\02Processed_csv\P2';
+DATA_FOLDER = 'C:\Users\PME406_01\Desktop\code\HSDATA\01Data\02Processed_csv\P1';
 
 % 穩態檢測參數
 STABILITY_THRESHOLD = 2e-3;          % 穩定性閾值
 CONSECUTIVE_PERIODS = 3;             % 需要連續穩定的週期數
-CHECK_POINTS = 50;                  % 每週期的檢查點數
+CHECK_POINTS = 25;                  % 每週期的檢查點數
 START_PERIOD = 1;                    % 開始檢測的週期
 
 % 顯示設定
@@ -20,11 +20,11 @@ DISPLAY_CHANNELS = [1,2,3,4,5,6];          % 控制要顯示的通道
 
 % 穩態波形疊圖設定
 PLOT_STEADY_STATE = true;           % 是否顯示穩態疊圖
-PLOT_CHANNEL = [2];              % 0=所有通道，1-6=特定通道，[3,5]=多個通道
-PLOT_FREQUENCY_LIST = [1, 10];      % 只對特定頻率顯示（空=全部）例如：[50, 100, 500]
+PLOT_CHANNEL = [1];              % 0=所有通道，1-6=特定通道，[3,5]=多個通道
+PLOT_FREQUENCY_LIST = [0.1];      % 只對特定頻率顯示（空=全部）例如：[50, 100, 500]
 
 % FFT分析模式
-FFT_MODE = 'averaged';               % 'full': 完整週期FFT, 'averaged': 週期平均後FFT, 'both': 同時計算並比較
+FFT_MODE = 'full';               % 'full': 完整週期FFT, 'averaged': 週期平均後FFT, 'both': 同時計算並比較
 COMPARE_FFT_METHODS = false;         % 是否比較兩種FFT方法的結果
 
 % 解析輸入參數
@@ -358,7 +358,7 @@ if ~isempty(frequencies)
     
     % 繪製波德圖
     fprintf('\nGenerating Bode plots...\n');
-    plot_bode_results(frequencies, magnitudes_db_normalized, phases, CHANNEL_COLORS, magnitudes_db, excitation_channels, DISPLAY_CHANNELS);
+    phases_processed = plot_bode_results(frequencies, magnitudes_db_normalized, phases, CHANNEL_COLORS, magnitudes_db, excitation_channels, DISPLAY_CHANNELS);
     
     % 保存到工作空間
     assignin('base', 'openloop_frequencies', frequencies);
@@ -366,6 +366,19 @@ if ~isempty(frequencies)
     assignin('base', 'openloop_magnitudes_db_normalized', magnitudes_db_normalized);
     assignin('base', 'openloop_phases', phases);
     fprintf('結果已保存到工作空間變數\n');
+
+    % 計算線性幅度數據
+    fprintf('\n計算線性幅度數據...\n');
+    magnitudes_linear = 10.^(magnitudes_db / 20);
+
+    % 提取資料夾名稱作為檔案名稱
+    [~, folder_name, ~] = fileparts(csv_folder);
+    output_filename = fullfile('c:\Users\PME406_01\Desktop\code\Openloop_Cali', [folder_name '.m']);
+
+    % 生成與P1.m格式相同的.m檔案
+    fprintf('儲存波德圖數據到 %s...\n', output_filename);
+    save_bode_data_to_file(output_filename, frequencies, magnitudes_linear, phases, phases_processed);
+    fprintf('✓ 波德圖數據已儲存\n');
 else
     fprintf('\n沒有成功處理任何檔案\n');
 end
@@ -563,7 +576,7 @@ end
 end
 
 %% 繪製波德圖（幅度和相位）
-function plot_bode_results(frequencies, magnitudes_db, phases, colors, original_magnitudes_db, excitation_channels, display_channels)
+function phases_processed = plot_bode_results(frequencies, magnitudes_db, phases, colors, original_magnitudes_db, excitation_channels, display_channels)
 
 % 處理相位數據
 phases_processed = phases;
@@ -904,5 +917,128 @@ else
     tolerance = 0.1;  % Hz
     % 確保返回純量邏輯值
     should_plot = any(abs(freq - freq_list(:)) < tolerance);
+end
+end
+
+%% 儲存波德圖數據到.m檔案（P1.m格式）
+function save_bode_data_to_file(filename, frequencies, magnitudes_linear, phases, phases_processed)
+% 以P1.m相同的格式儲存波德圖數據
+% 輸入:
+%   filename: 輸出檔案路徑
+%   frequencies: 頻率向量 (1 x N)
+%   magnitudes_linear: 線性幅度矩陣 (6 x N)
+%   phases: 原始相位矩陣 (6 x N)
+%   phases_processed: 處理後相位矩陣 (6 x N)
+
+% 打開檔案寫入
+fid = fopen(filename, 'w');
+if fid == -1
+    error('無法創建檔案: %s', filename);
+end
+
+try
+    % 寫入標題註解
+    fprintf(fid, '%% Bode Plot Data\n');
+    fprintf(fid, '%% Generated: %s\n', datestr(now, 'yyyy-mm-dd HH:MM:SS'));
+    fprintf(fid, '%% Data dimension: 6 channels x %d frequency points\n', length(frequencies));
+    fprintf(fid, '%% Channels: P1-P6\n\n');
+
+    % 寫入頻率數據
+    fprintf(fid, '%% Frequency points (Hz)\n');
+    fprintf(fid, 'frequencies = [');
+
+    % 將頻率數據分成多行顯示（每行最多10個）
+    items_per_line = 10;
+    for i = 1:length(frequencies)
+        if mod(i-1, items_per_line) == 0
+            if i > 1
+                fprintf(fid, ' ...\n               ');
+            end
+        end
+
+        if i < length(frequencies)
+            fprintf(fid, '%.6f, ', frequencies(i));
+        else
+            fprintf(fid, '%.6f', frequencies(i));
+        end
+    end
+    fprintf(fid, '];\n\n');
+
+    % 寫入線性幅度數據
+    fprintf(fid, '%% Linear magnitude (6 channels x %d frequencies)\n', length(frequencies));
+    fprintf(fid, '%% Row 1-6: P1-P6\n');
+    fprintf(fid, 'magnitudes_linear = [\n');
+    for ch = 1:6
+        fprintf(fid, '    ');
+        for i = 1:length(frequencies)
+            if i < length(frequencies)
+                fprintf(fid, '%.6e, ', magnitudes_linear(ch, i));
+            else
+                fprintf(fid, '%.6e', magnitudes_linear(ch, i));
+            end
+        end
+        if ch < 6
+            fprintf(fid, '; ...\n');
+        else
+            fprintf(fid, '\n');
+        end
+    end
+    fprintf(fid, '];\n\n');
+
+    % 寫入原始相位數據
+    fprintf(fid, '%% Original phase (degrees)\n');
+    fprintf(fid, 'phases = [\n');
+    for ch = 1:6
+        fprintf(fid, '    ');
+        for i = 1:length(frequencies)
+            if i < length(frequencies)
+                fprintf(fid, '%.4f, ', phases(ch, i));
+            else
+                fprintf(fid, '%.4f', phases(ch, i));
+            end
+        end
+        if ch < 6
+            fprintf(fid, '; ...\n');
+        else
+            fprintf(fid, '\n');
+        end
+    end
+    fprintf(fid, '];\n\n');
+
+    % 寫入處理後相位數據
+    fprintf(fid, '%% Processed phase (degrees, with 180deg correction)\n');
+    fprintf(fid, 'phases_processed = [\n');
+    for ch = 1:6
+        fprintf(fid, '    ');
+        for i = 1:length(frequencies)
+            if i < length(frequencies)
+                fprintf(fid, '%.4f, ', phases_processed(ch, i));
+            else
+                fprintf(fid, '%.4f', phases_processed(ch, i));
+            end
+        end
+        if ch < 6
+            fprintf(fid, '; ...\n');
+        else
+            fprintf(fid, '\n');
+        end
+    end
+    fprintf(fid, '];\n\n');
+
+    % 寫入使用說明
+    fprintf(fid, '%% Usage Example:\n');
+    fprintf(fid, '%% 1. Plot magnitude (linear) for all channels:\n');
+    fprintf(fid, '%%    figure; loglog(frequencies, magnitudes_linear''); legend(''P1'',''P2'',''P3'',''P4'',''P5'',''P6'');\n');
+    fprintf(fid, '%% 2. Plot magnitude (dB) for channel 1:\n');
+    fprintf(fid, '%%    figure; semilogx(frequencies, 20*log10(magnitudes_linear(1,:)));\n');
+    fprintf(fid, '%% 3. Plot processed phase for all channels:\n');
+    fprintf(fid, '%%    figure; semilogx(frequencies, phases_processed''); legend(''P1'',''P2'',''P3'',''P4'',''P5'',''P6'');\n');
+
+    fclose(fid);
+    fprintf('    檔案寫入成功: %s\n', filename);
+
+catch ME
+    fclose(fid);
+    rethrow(ME);
 end
 end
