@@ -332,8 +332,8 @@ def main():
     target_folder = "P6"  # 改成你要處理的資料夾名稱
     
     # 基礎路徑設定 - 根據你的電腦路徑修改
-    base_input_folder = "C:/Users/PME406_01/Desktop/code/HSDATA/01Data/01Raw_dat"
-    base_output_folder = "C:/Users/PME406_01/Desktop/code/HSDATA/01Data/02Processed_csv"
+    base_input_folder = "C:/Users/kevin/Desktop/code/HSDATA/01Data/01Raw_dat"
+    base_output_folder = "C:/Users/kevin/Desktop/code/HSDATA/01Data/02Processed_csv"
     
     # 組合出完整的輸入和輸出路徑
     input_folder = Path(base_input_folder) / target_folder
