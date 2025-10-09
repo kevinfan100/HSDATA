@@ -25,11 +25,11 @@ function openloop_bode_main(varargin)
 %  ========================================================================
 
 % --- Output Control ---
-VERBOSE_LEVEL = 1;                   % Output verbosity: 0=progress bar only, 1=basic, 2=detailed, 3=debug
+VERBOSE_LEVEL = 0;                   % Output verbosity: 0=progress bar only, 1=basic, 2=detailed, 3=debug
 
 % --- File I/O Configuration ---
 SCRIPT_DIR = fileparts(mfilename('fullpath'));      % Auto-detect script location
-DEFAULT_DATA_FOLDER = fullfile(SCRIPT_DIR, 'processed_csv', 'P1');
+DEFAULT_DATA_FOLDER = fullfile(SCRIPT_DIR, '02processed_csv', 'P1');
 OUTPUT_BASE_FOLDER = SCRIPT_DIR;
 
 % --- Signal Processing Parameters ---
@@ -55,7 +55,7 @@ DISPLAY_CHANNELS = [1,2,3,4,5,6];            % Channels to display in Bode plot
 PLOT_STEADY_STATE = true;                    % Enable steady-state waveform overlay plot
 PLOT_CHANNEL = [1];                          % Channels for overlay: 0=all, 1-6=specific, [3,5]=multiple
 PLOT_FREQUENCY_LIST = [0.1];                 % Specific frequencies to plot (empty=all frequencies)
-PLOT_FFT_SPECTRUM = false;                   % Enable FFT spectrum visualization
+PLOT_FFT_SPECTRUM = true;                   % Enable FFT spectrum visualization
 PLOT_FFT_FREQUENCY_LIST = [];                % Specific frequencies to plot FFT (empty=all frequencies)
 
 % --- Model Parameters (for theoretical Bode curve) ---
@@ -481,15 +481,11 @@ function steady_info = detect_steady_state(vm_signal, target_freq, sampling_rate
         % Run fixed threshold detection
         steady_info_fixed = detect_steady_state_internal(vm_clean, period_samples, max_periods, ...
             check_positions, stability_threshold, consecutive_periods, start_period, ...
-            'fixed', 0, verbose_level);
+            'fixed', stability_threshold, verbose_level);
 
-        % Calculate adaptive threshold
-        adaptive_threshold = calculate_adaptive_threshold(vm_clean, period_samples, ...
-            stability_percentage, verbose_level);
-
-        % Run adaptive threshold detection
+        % Run adaptive threshold detection (percentage-based)
         steady_info_adaptive = detect_steady_state_internal(vm_clean, period_samples, max_periods, ...
-            check_positions, adaptive_threshold, consecutive_periods, start_period, ...
+            check_positions, stability_percentage, consecutive_periods, start_period, ...
             'adaptive', stability_percentage, verbose_level);
 
         % Display comparison
@@ -502,8 +498,8 @@ function steady_info = detect_steady_state(vm_signal, target_freq, sampling_rate
         end
 
         if ~isempty(steady_info_adaptive)
-            vprintf(verbose_level, 1, '  Adaptive (%.2f%%)   → Period %d (%.2e V)\n', ...
-                stability_percentage, steady_info_adaptive.period, adaptive_threshold);
+            vprintf(verbose_level, 1, '  Adaptive (%.2f%%)   → Period %d\n', ...
+                stability_percentage, steady_info_adaptive.period);
         else
             vprintf(verbose_level, 1, '  Adaptive (%.2f%%)   → Not found\n', stability_percentage);
         end
@@ -529,16 +525,16 @@ function steady_info = detect_steady_state(vm_signal, target_freq, sampling_rate
         return;
 
     elseif strcmp(stability_mode, 'adaptive')
-        % Use adaptive threshold
-        adaptive_threshold = calculate_adaptive_threshold(vm_clean, period_samples, ...
-            stability_percentage, verbose_level);
-        vprintf(verbose_level, 2, '    Using adaptive threshold: %.2e V (%.2f%% of p2p)\n', ...
-            adaptive_threshold, stability_percentage);
-        actual_threshold = adaptive_threshold;
+        % Use adaptive threshold (percentage-based, calculated per-period)
+        vprintf(verbose_level, 2, '    Using adaptive threshold: %.2f%% of each period''s p2p\n', ...
+            stability_percentage);
+        threshold_param = stability_percentage;
+        mode_name = 'adaptive';
     else
         % Use fixed threshold (default)
         vprintf(verbose_level, 3, '    Using fixed threshold: %.2e V\n', stability_threshold);
-        actual_threshold = stability_threshold;
+        threshold_param = stability_threshold;
+        mode_name = 'fixed';
     end
 
     % Handle insufficient data case
@@ -554,15 +550,15 @@ function steady_info = detect_steady_state(vm_signal, target_freq, sampling_rate
         return;
     end
 
-    % Run steady-state detection with selected threshold
+    % Run steady-state detection with selected threshold/percentage
     steady_info = detect_steady_state_internal(vm_clean, period_samples, max_periods, ...
-        check_positions, actual_threshold, consecutive_periods, start_period, ...
-        stability_mode, stability_percentage, verbose_level);
+        check_positions, threshold_param, consecutive_periods, start_period, ...
+        mode_name, threshold_param, verbose_level);
 end
 
 
 function steady_info = detect_steady_state_internal(vm_clean, period_samples, max_periods, ...
-    check_positions, threshold, consecutive_periods, start_period, mode_name, mode_param, verbose_level)
+    check_positions, threshold_param, consecutive_periods, start_period, mode_name, mode_param, verbose_level)
 % DETECT_STEADY_STATE_INTERNAL Core detection algorithm
 %
 % Input:
@@ -570,17 +566,18 @@ function steady_info = detect_steady_state_internal(vm_clean, period_samples, ma
 %   period_samples - Samples per period
 %   max_periods - Maximum available periods
 %   check_positions - Check point positions within period
-%   threshold - Threshold value (V)
+%   threshold_param - For 'fixed': threshold value (V), For 'adaptive': percentage (%)
 %   consecutive_periods - Required consecutive stable periods
 %   start_period - Starting period for detection
-%   mode_name - Mode name for logging
-%   mode_param - Mode parameter for logging
+%   mode_name - 'fixed' or 'adaptive'
+%   mode_param - Mode parameter (for logging)
 %   verbose_level - Verbosity level
 %
 % Output:
 %   steady_info - Steady-state information structure or []
 
     steady_periods = [];
+    is_adaptive = strcmp(mode_name, 'adaptive');
 
     % Detect steady-state for each VM channel
     for vm_ch = 1:6
@@ -596,7 +593,24 @@ function steady_info = detect_steady_state_internal(vm_clean, period_samples, ma
                 next_period = current_period + 1;
 
                 current_start = current_period * period_samples + 1;
+                current_end = current_start + period_samples - 1;
                 next_start = next_period * period_samples + 1;
+                next_end = next_start + period_samples - 1;
+
+                % Boundary check
+                if current_end > length(signal) || next_end > length(signal)
+                    all_stable = false;
+                    break;
+                end
+
+                % Calculate adaptive threshold based on CURRENT period's p2p
+                if is_adaptive
+                    current_period_data = signal(current_start:current_end);
+                    current_p2p = max(current_period_data) - min(current_period_data);
+                    current_threshold = current_p2p * (threshold_param / 100);
+                else
+                    current_threshold = threshold_param;
+                end
 
                 max_diff = 0;
 
@@ -615,7 +629,7 @@ function steady_info = detect_steady_state_internal(vm_clean, period_samples, ma
                 end
 
                 % Mark as unstable if difference exceeds threshold
-                if max_diff >= threshold
+                if max_diff >= current_threshold
                     all_stable = false;
                     break;
                 end
@@ -643,7 +657,11 @@ function steady_info = detect_steady_state_internal(vm_clean, period_samples, ma
         vprintf(verbose_level, 3, '    Steady-state detected: Period %d, Index %d\n', recommended_period, clean_index);
     else
         % Use last periods if no stable period found
-        vprintf(verbose_level, 2, '    Warning: No stable period found (threshold %.4fV)\n', threshold);
+        if is_adaptive
+            vprintf(verbose_level, 2, '    Warning: No stable period found (adaptive %.2f%%)\n', threshold_param);
+        else
+            vprintf(verbose_level, 2, '    Warning: No stable period found (threshold %.4fV)\n', threshold_param);
+        end
         vprintf(verbose_level, 2, '    Using last %d periods as steady-state (may be unstable)\n', consecutive_periods);
 
         steady_period = max(1, max_periods - consecutive_periods);
@@ -652,35 +670,6 @@ function steady_info = detect_steady_state_internal(vm_clean, period_samples, ma
                             'max_periods', max_periods, ...
                             'period_samples', period_samples);
     end
-end
-
-
-function adaptive_threshold = calculate_adaptive_threshold(vm_clean, period_samples, percentage, verbose_level)
-% CALCULATE_ADAPTIVE_THRESHOLD Calculate adaptive threshold based on first period peak-to-peak
-%
-% Input:
-%   vm_clean - VM data (6 x N)
-%   period_samples - Samples per period
-%   percentage - Percentage of first period p2p to use
-%   verbose_level - Verbosity level
-%
-% Output:
-%   adaptive_threshold - Calculated threshold (V)
-
-    % Extract first period data for all channels
-    first_period_data = vm_clean(:, 1:period_samples);
-
-    % Calculate peak-to-peak for each channel
-    p2p_values = max(first_period_data, [], 2) - min(first_period_data, [], 2);
-
-    % Use average p2p across all channels
-    avg_p2p = mean(p2p_values);
-
-    % Calculate adaptive threshold as percentage of p2p
-    adaptive_threshold = avg_p2p * (percentage / 100);
-
-    vprintf(verbose_level, 3, '    First period avg p2p: %.4f V, Adaptive threshold: %.4f V\n', ...
-        avg_p2p, adaptive_threshold);
 end
 
 
