@@ -24,6 +24,9 @@ function openloop_bode_main(varargin)
 %  All adjustable parameters are centralized here
 %  ========================================================================
 
+% --- Output Control ---
+VERBOSE_LEVEL = 1;                   % Output verbosity: 0=progress bar only, 1=basic, 2=detailed, 3=debug
+
 % --- File I/O Configuration ---
 SCRIPT_DIR = fileparts(mfilename('fullpath'));      % Auto-detect script location
 DEFAULT_DATA_FOLDER = fullfile(SCRIPT_DIR, 'processed_csv', 'P1');
@@ -71,8 +74,8 @@ else
     csv_folder = DEFAULT_DATA_FOLDER;
 end
 
-fprintf('=== OPENLOOP BODE ANALYSIS ===\n');
-fprintf('Data folder: %s\n', csv_folder);
+vprintf(VERBOSE_LEVEL, 1, '=== OPENLOOP BODE ANALYSIS ===\n');
+vprintf(VERBOSE_LEVEL, 1, 'Data folder: %s\n', csv_folder);
 
 % Validate data folder existence
 if ~exist(csv_folder, 'dir')
@@ -86,7 +89,7 @@ if isempty(csv_files)
     error('No CSV files found in folder: %s', csv_folder);
 end
 
-fprintf('Found %d CSV files\n\n', length(csv_files));
+vprintf(VERBOSE_LEVEL, 1, 'Found %d CSV files\n\n', length(csv_files));
 
 % Initialize result arrays
 frequencies = [];
@@ -104,38 +107,52 @@ for i = 1:length(csv_files)
     csv_file = csv_files(i);
     file_path = fullfile(csv_folder, csv_file.name);
 
-    fprintf('[%d/%d] Processing: %s (%.1f MB)\n', ...
-        i, length(csv_files), csv_file.name, csv_file.bytes/1024/1024);
+    % Level 0: Progress bar style
+    if VERBOSE_LEVEL == 0
+        progress_pct = (i-1) / length(csv_files) * 100;
+        fprintf('[%d/%d] ', i, length(csv_files));
+        fprintf(repmat('█', 1, floor(progress_pct/10)));
+        fprintf(repmat('░', 1, 10 - floor(progress_pct/10)));
+        fprintf(' %.0f%%\r', progress_pct);
+    else
+        % Level 1+: Show filename
+        vprintf(VERBOSE_LEVEL, 1, '[%d/%d] Processing: %s', i, length(csv_files), csv_file.name);
+        vprintf(VERBOSE_LEVEL, 2, ' (%.1f MB)', csv_file.bytes/1024/1024);
+        vprintf(VERBOSE_LEVEL, 1, '\n');
+    end
 
     try
         % --- Step 3.1: Load CSV data ---
-        fprintf('  Step 1: Loading CSV data...\n');
+        vprintf(VERBOSE_LEVEL, 2, '  Step 1: Loading CSV data...\n');
         [vm_data, da_data] = load_csv_data(file_path);
         data_length = size(vm_data, 2);
 
         % --- Step 3.2: Repair bad data points ---
-        fprintf('  Step 2: Repairing bad data points...\n');
-        [vm_clean, da_clean] = repair_data_points(vm_data, da_data, data_length, INTERPOLATION_METHOD);
+        vprintf(VERBOSE_LEVEL, 2, '  Step 2: Repairing bad data points...\n');
+        [vm_clean, da_clean] = repair_data_points(vm_data, da_data, data_length, INTERPOLATION_METHOD, VERBOSE_LEVEL);
 
         % Convert DA to voltage
         da_volt = (da_clean - 32768) * (20.0 / 65536);
 
         % --- Step 3.3: Detect excitation channel and frequency ---
-        fprintf('  Step 3: Detecting excitation channel and frequency...\n');
+        vprintf(VERBOSE_LEVEL, 2, '  Step 3: Detecting excitation channel and frequency...\n');
         [excite_ch, excite_freq] = detect_excitation(da_volt, SAMPLING_RATE);
-        fprintf('    Excitation: DA%d, Frequency: %.1f Hz\n', excite_ch, excite_freq);
+        vprintf(VERBOSE_LEVEL, 1, ' → DA%d @ %.1f Hz', excite_ch, excite_freq);
+        vprintf(VERBOSE_LEVEL, 2, '\n    Excitation: DA%d, Frequency: %.1f Hz', excite_ch, excite_freq);
+        vprintf(VERBOSE_LEVEL, 1, ' ');
 
         % --- Step 3.4: Steady-state detection ---
-        fprintf('  Step 4: Steady-state detection...\n');
+        vprintf(VERBOSE_LEVEL, 2, '\n  Step 4: Steady-state detection...\n');
         steady_info = detect_steady_state(vm_clean, excite_freq, SAMPLING_RATE, ...
-            STABILITY_THRESHOLD, CONSECUTIVE_PERIODS, CHECK_POINTS, START_PERIOD);
+            STABILITY_THRESHOLD, CONSECUTIVE_PERIODS, CHECK_POINTS, START_PERIOD, VERBOSE_LEVEL);
 
         if isempty(steady_info)
-            fprintf('  ✗ Steady-state detection failed, skipping file\n');
+            vprintf(VERBOSE_LEVEL, 1, '✗ (Steady-state failed)\n');
+            vprintf(VERBOSE_LEVEL, 2, '  ✗ Steady-state detection failed, skipping file\n');
             continue;
         end
 
-        fprintf('    Steady-state starts at period: %d\n', steady_info.period);
+        vprintf(VERBOSE_LEVEL, 2, '    Steady-state starts at period: %d\n', steady_info.period);
 
         % Plot steady-state waveform overlay (if enabled)
         if PLOT_STEADY_STATE && should_plot_frequency(excite_freq, PLOT_FREQUENCY_LIST)
@@ -144,10 +161,10 @@ for i = 1:length(csv_files)
         end
 
         % --- Step 3.5: FFT analysis ---
-        fprintf('  Step 5: FFT analysis (mode: %s)...\n', FFT_MODE);
+        vprintf(VERBOSE_LEVEL, 2, '  Step 5: FFT analysis (mode: %s)...\n', FFT_MODE);
         [current_magnitudes_db, current_phases] = perform_fft_analysis(...
             vm_clean, da_volt, steady_info, excite_ch, excite_freq, ...
-            SAMPLING_RATE, FFT_MODE, MIN_DA_THRESHOLD, COMPARE_FFT_METHODS);
+            SAMPLING_RATE, FFT_MODE, MIN_DA_THRESHOLD, COMPARE_FFT_METHODS, VERBOSE_LEVEL);
 
         % Plot FFT spectrum (if enabled)
         if PLOT_FFT_SPECTRUM && should_plot_frequency(excite_freq, PLOT_FFT_FREQUENCY_LIST)
@@ -161,10 +178,12 @@ for i = 1:length(csv_files)
         phases(:, end+1) = current_phases;
         excitation_channels = [excitation_channels, excite_ch];
 
-        fprintf('  ✓ Successfully processed frequency %.1f Hz\n\n', excite_freq);
+        vprintf(VERBOSE_LEVEL, 1, '✓\n');
+        vprintf(VERBOSE_LEVEL, 2, '  ✓ Successfully processed frequency %.1f Hz\n\n', excite_freq);
 
     catch err
-        fprintf('  ✗ Processing failed: %s\n\n', err.message);
+        vprintf(VERBOSE_LEVEL, 1, '✗ (%s)\n', err.message);
+        vprintf(VERBOSE_LEVEL, 2, '  ✗ Processing failed: %s\n\n', err.message);
         continue;
     end
 end
@@ -175,7 +194,7 @@ end
 %  ========================================================================
 
 if isempty(frequencies)
-    fprintf('No files were successfully processed\n');
+    vprintf(VERBOSE_LEVEL, 1, 'No files were successfully processed\n');
     return;
 end
 
@@ -186,29 +205,29 @@ phases = phases(:, sort_idx);
 excitation_channels = excitation_channels(sort_idx);
 
 % --- Normalize magnitude data ---
-fprintf('Normalizing magnitude data...\n');
-magnitudes_db_normalized = normalize_magnitudes(magnitudes_db, frequencies);
+vprintf(VERBOSE_LEVEL, 2, 'Normalizing magnitude data...\n');
+magnitudes_db_normalized = normalize_magnitudes(magnitudes_db, frequencies, VERBOSE_LEVEL);
 
 % --- Analysis summary ---
-fprintf('\n=== ANALYSIS COMPLETE ===\n');
-fprintf('Successfully processed: %d frequency points\n', length(frequencies));
-fprintf('Frequency range: %.1f - %.1f Hz\n', min(frequencies), max(frequencies));
+vprintf(VERBOSE_LEVEL, 1, '\n=== ANALYSIS COMPLETE ===\n');
+vprintf(VERBOSE_LEVEL, 1, 'Successfully processed: %d frequency points\n', length(frequencies));
+vprintf(VERBOSE_LEVEL, 1, 'Frequency range: %.1f - %.1f Hz\n', min(frequencies), max(frequencies));
 
 % --- Generate Bode plots ---
-fprintf('\nGenerating Bode plots...\n');
+vprintf(VERBOSE_LEVEL, 2, '\nGenerating Bode plots...\n');
 phases_processed = plot_bode_results(frequencies, magnitudes_db_normalized, phases, ...
     CHANNEL_COLORS, magnitudes_db, excitation_channels, DISPLAY_CHANNELS, ...
-    MODEL_WN_SQUARED, MODEL_TWO_ZETA_WN);
+    MODEL_WN_SQUARED, MODEL_TWO_ZETA_WN, VERBOSE_LEVEL);
 
 % --- Save to workspace ---
 assignin('base', 'openloop_frequencies', frequencies);
 assignin('base', 'openloop_magnitudes_db_original', magnitudes_db);
 assignin('base', 'openloop_magnitudes_db_normalized', magnitudes_db_normalized);
 assignin('base', 'openloop_phases', phases);
-fprintf('Results saved to workspace variables\n');
+vprintf(VERBOSE_LEVEL, 2, 'Results saved to workspace variables\n');
 
 % --- Calculate linear magnitude ---
-fprintf('\nCalculating linear magnitude data...\n');
+vprintf(VERBOSE_LEVEL, 2, '\nCalculating linear magnitude data...\n');
 magnitudes_linear = 10.^(magnitudes_db / 20);
 
 % --- Generate output filename from folder name ---
@@ -216,11 +235,11 @@ magnitudes_linear = 10.^(magnitudes_db / 20);
 output_filename = fullfile(OUTPUT_BASE_FOLDER, [folder_name '.m']);
 
 % --- Save to .m file (P1.m format) ---
-fprintf('Saving Bode data to: %s...\n', output_filename);
-save_bode_data_to_file(output_filename, frequencies, magnitudes_linear, phases, phases_processed);
-fprintf('✓ Bode data saved successfully\n');
+vprintf(VERBOSE_LEVEL, 1, 'Saving Bode data to: %s...\n', output_filename);
+save_bode_data_to_file(output_filename, frequencies, magnitudes_linear, phases, phases_processed, VERBOSE_LEVEL);
+vprintf(VERBOSE_LEVEL, 1, '✓ Bode data saved successfully\n');
 
-fprintf('\n=== ALL OPERATIONS COMPLETE ===\n');
+vprintf(VERBOSE_LEVEL, 1, '\n=== ALL OPERATIONS COMPLETE ===\n');
 
 end
 
@@ -228,6 +247,27 @@ end
 %% ========================================================================
 %  SECTION 5: HELPER FUNCTIONS
 %  ========================================================================
+
+%% ------------------------------------------------------------------------
+%  5.0 OUTPUT CONTROL
+%  ------------------------------------------------------------------------
+
+function vprintf(verbose_level, required_level, varargin)
+% VPRINTF Verbose-level controlled fprintf
+%
+% Input:
+%   verbose_level - Current verbosity setting (0-3)
+%   required_level - Minimum level required for this message
+%   varargin - fprintf format string and arguments
+%
+% Usage:
+%   vprintf(VERBOSE_LEVEL, 1, 'Processing file: %s\n', filename);
+
+    if verbose_level >= required_level
+        fprintf(varargin{:});
+    end
+end
+
 
 %% ------------------------------------------------------------------------
 %  5.1 DATA LOADING & PREPROCESSING
@@ -266,7 +306,7 @@ function [vm_data, da_data] = load_csv_data(file_path)
 end
 
 
-function [vm_clean, da_clean] = repair_data_points(vm_data, da_data, data_length, interpolation_method)
+function [vm_clean, da_clean] = repair_data_points(vm_data, da_data, data_length, interpolation_method, verbose_level)
 % REPAIR_DATA_POINTS Repair bad data points using interpolation
 %
 % Input:
@@ -274,6 +314,7 @@ function [vm_clean, da_clean] = repair_data_points(vm_data, da_data, data_length
 %   da_data - Raw DA data (6 x N)
 %   data_length - Total number of data points
 %   interpolation_method - Interpolation method ('linear'|'spline'|'pchip'|'makima')
+%   verbose_level - Verbosity level (0-3)
 %
 % Output:
 %   vm_clean - Repaired VM data (6 x N)
@@ -283,7 +324,7 @@ function [vm_clean, da_clean] = repair_data_points(vm_data, da_data, data_length
     bad_indices = 1:10000:data_length;
     num_bad_points = length(bad_indices);
 
-    fprintf('    Using interpolation method: %s\n', interpolation_method);
+    vprintf(verbose_level, 3, '    Using interpolation method: %s\n', interpolation_method);
 
     % Copy original data
     vm_clean = vm_data;
@@ -308,7 +349,7 @@ function [vm_clean, da_clean] = repair_data_points(vm_data, da_data, data_length
                         da_data(ch, good_indices), bad_indices, interpolation_method, 'extrap');
                 catch
                     % Fallback to linear interpolation if advanced method fails
-                    fprintf('    Warning: Ch%d interpolation failed, using linear fallback\n', ch);
+                    vprintf(verbose_level, 2, '    Warning: Ch%d interpolation failed, using linear fallback\n', ch);
                     vm_clean(ch, bad_indices) = interp1(good_indices, ...
                         vm_data(ch, good_indices), bad_indices, 'linear', 'extrap');
                     da_clean(ch, bad_indices) = interp1(good_indices, ...
@@ -329,11 +370,11 @@ function [vm_clean, da_clean] = repair_data_points(vm_data, da_data, data_length
         vm_error_rms = sqrt(mean((vm_clean(:, bad_indices) - vm_bad_original).^2, 2));
         da_error_rms = sqrt(mean((da_clean(:, bad_indices) - da_bad_original).^2, 2));
 
-        fprintf('    VM repair RMS error: %.6f V (average)\n', mean(vm_error_rms));
-        fprintf('    DA repair RMS error: %.6f V (average)\n', mean(da_error_rms));
+        vprintf(verbose_level, 3, '    VM repair RMS error: %.6f V (average)\n', mean(vm_error_rms));
+        vprintf(verbose_level, 3, '    DA repair RMS error: %.6f V (average)\n', mean(da_error_rms));
     end
 
-    fprintf('    Total data points: %d, Repaired points: %d\n', data_length, num_bad_points);
+    vprintf(verbose_level, 3, '    Total data points: %d, Repaired points: %d\n', data_length, num_bad_points);
 end
 
 
@@ -389,7 +430,7 @@ end
 
 
 function steady_info = detect_steady_state(vm_signal, target_freq, sampling_rate, ...
-    stability_threshold, consecutive_periods, check_points, start_period)
+    stability_threshold, consecutive_periods, check_points, start_period, verbose_level)
 % DETECT_STEADY_STATE Detect steady-state region in VM signal
 %
 % Input:
@@ -400,6 +441,7 @@ function steady_info = detect_steady_state(vm_signal, target_freq, sampling_rate
 %   consecutive_periods - Number of consecutive stable periods required
 %   check_points - Number of check points per period
 %   start_period - Starting period index for detection
+%   verbose_level - Verbosity level (0-3)
 %
 % Output:
 %   steady_info - Structure containing:
@@ -423,12 +465,12 @@ function steady_info = detect_steady_state(vm_signal, target_freq, sampling_rate
     max_periods = floor(clean_length / period_samples);
     check_positions = round(linspace(1, period_samples, check_points));
 
-    fprintf('    Period samples: %d, Max periods: %d\n', period_samples, max_periods);
+    vprintf(verbose_level, 3, '    Period samples: %d, Max periods: %d\n', period_samples, max_periods);
 
     % Handle insufficient data case
     if max_periods < 5
-        fprintf('    ⚠ Warning: Insufficient periods (only %d), using last period as steady-state\n', max_periods);
-        fprintf('    ⚠ Data may contain transient response, reliability is low!\n');
+        vprintf(verbose_level, 2, '    ⚠ Warning: Insufficient periods (only %d), using last period as steady-state\n', max_periods);
+        vprintf(verbose_level, 2, '    ⚠ Data may contain transient response, reliability is low!\n');
 
         steady_period = max(1, max_periods - 1);
         steady_info = struct('period', steady_period, ...
@@ -498,11 +540,11 @@ function steady_info = detect_steady_state(vm_signal, target_freq, sampling_rate
             'max_periods', max_periods, ...
             'period_samples', period_samples);
 
-        fprintf('    Steady-state detected: Period %d, Index %d\n', recommended_period, clean_index);
+        vprintf(verbose_level, 3, '    Steady-state detected: Period %d, Index %d\n', recommended_period, clean_index);
     else
         % Use last periods if no stable period found
-        fprintf('    Warning: No stable period found (threshold %.4fV)\n', stability_threshold);
-        fprintf('    Using last %d periods as steady-state (may be unstable)\n', consecutive_periods);
+        vprintf(verbose_level, 2, '    Warning: No stable period found (threshold %.4fV)\n', stability_threshold);
+        vprintf(verbose_level, 2, '    Using last %d periods as steady-state (may be unstable)\n', consecutive_periods);
 
         steady_period = max(1, max_periods - consecutive_periods);
         steady_info = struct('period', steady_period, ...
@@ -519,7 +561,7 @@ end
 
 function [magnitudes_db, phases] = perform_fft_analysis(...
     vm_clean, da_volt, steady_info, excite_ch, excite_freq, ...
-    sampling_rate, fft_mode, min_da_threshold, compare_fft_methods)
+    sampling_rate, fft_mode, min_da_threshold, compare_fft_methods, verbose_level)
 % PERFORM_FFT_ANALYSIS Calculate transfer function using FFT
 %
 % Transfer Function Calculation:
@@ -561,13 +603,13 @@ function [magnitudes_db, phases] = perform_fft_analysis(...
     available_periods = floor(available_length / period_samples);
 
     if available_periods < 1
-        fprintf('    Warning: Insufficient data for one complete period\n');
+        vprintf(verbose_level, 2, '    Warning: Insufficient data for one complete period\n');
         return;
     end
 
     % --- Averaged FFT Mode ---
     if strcmp(fft_mode, 'averaged')
-        fprintf('    Using period-averaged FFT: %d periods\n', available_periods);
+        vprintf(verbose_level, 3, '    Using period-averaged FFT: %d periods\n', available_periods);
 
         da_signal = da_volt(excite_ch, :);
 
@@ -591,7 +633,7 @@ function [magnitudes_db, phases] = perform_fft_analysis(...
 
         % Calculate period-to-period standard deviation
         vm_std = squeeze(std(vm_periods, 0, 2));
-        fprintf('    VM inter-period std: %.6f (average)\n', mean(vm_std(:)));
+        vprintf(verbose_level, 3, '    VM inter-period std: %.6f (average)\n', mean(vm_std(:)));
 
         % FFT for each channel
         for ch = 1:6
@@ -606,7 +648,7 @@ function [magnitudes_db, phases] = perform_fft_analysis(...
             % Validate frequency bin
             actual_freq = (target_bin - 1) * freq_resolution_avg;
             if abs(actual_freq - excite_freq) > 0.01
-                fprintf('    Warning CH%d: Frequency mismatch - target %.2f Hz, actual %.2f Hz\n', ...
+                vprintf(verbose_level, 2, '    Warning CH%d: Frequency mismatch - target %.2f Hz, actual %.2f Hz\n', ...
                         ch, excite_freq, actual_freq);
             end
 
@@ -627,23 +669,23 @@ function [magnitudes_db, phases] = perform_fft_analysis(...
 
         % Compare with full FFT if requested
         if compare_fft_methods
-            fprintf('    Calculating full FFT for comparison...\n');
+            vprintf(verbose_level, 2, '    Calculating full FFT for comparison...\n');
             [magnitudes_full, phases_full] = calculate_full_fft(...
                 vm_clean, da_volt, excite_ch, excite_freq, ...
                 steady_start, available_periods, period_samples, ...
-                sampling_rate, min_da_threshold);
+                sampling_rate, min_da_threshold, verbose_level);
 
-            fprintf('    === FFT Method Comparison ===\n');
+            vprintf(verbose_level, 2, '    === FFT Method Comparison ===\n');
             for ch = 1:6
                 mag_diff = magnitudes_db(ch) - magnitudes_full(ch);
                 phase_diff = phases(ch) - phases_full(ch);
-                fprintf('    CH%d: ΔMag=%.3f dB, ΔPhase=%.2f°\n', ch, mag_diff, phase_diff);
+                vprintf(verbose_level, 2, '    CH%d: ΔMag=%.3f dB, ΔPhase=%.2f°\n', ch, mag_diff, phase_diff);
             end
         end
 
     % --- Full FFT Mode ---
     else
-        fprintf('    Using full FFT: %d periods\n', available_periods);
+        vprintf(verbose_level, 3, '    Using full FFT: %d periods\n', available_periods);
 
         for ch = 1:6
             vm_signal = vm_clean(ch, :);
@@ -655,7 +697,7 @@ function [magnitudes_db, phases] = perform_fft_analysis(...
 
             % Boundary validation
             if end_index > max_index
-                fprintf('    Warning CH%d: Requested end_index (%d) exceeds data length (%d)\n', ...
+                vprintf(verbose_level, 2, '    Warning CH%d: Requested end_index (%d) exceeds data length (%d)\n', ...
                         ch, end_index, max_index);
                 end_index = max_index;
             end
@@ -663,7 +705,7 @@ function [magnitudes_db, phases] = perform_fft_analysis(...
             % Ensure we have at least one complete period
             actual_length = end_index - steady_start + 1;
             if actual_length < period_samples
-                fprintf('    Warning CH%d: Insufficient data (%d samples) for one period (%d samples)\n', ...
+                vprintf(verbose_level, 2, '    Warning CH%d: Insufficient data (%d samples) for one period (%d samples)\n', ...
                         ch, actual_length, period_samples);
                 magnitudes_db(ch) = -Inf;
                 phases(ch) = 0;
@@ -686,7 +728,7 @@ function [magnitudes_db, phases] = perform_fft_analysis(...
             % Validate frequency bin
             actual_freq = (target_bin - 1) * freq_resolution;
             if abs(actual_freq - excite_freq) > 0.01
-                fprintf('    Warning CH%d: Frequency mismatch - target %.2f Hz, actual %.2f Hz\n', ...
+                vprintf(verbose_level, 2, '    Warning CH%d: Frequency mismatch - target %.2f Hz, actual %.2f Hz\n', ...
                         ch, excite_freq, actual_freq);
             end
 
@@ -711,7 +753,7 @@ end
 function [magnitudes_db, phases] = calculate_full_fft(...
     vm_clean, da_volt, excite_ch, excite_freq, ...
     steady_start, available_periods, period_samples, ...
-    sampling_rate, min_da_threshold)
+    sampling_rate, min_da_threshold, verbose_level)
 % CALCULATE_FULL_FFT Helper function for full FFT calculation
 % (Used for comparison in averaged mode)
 
@@ -724,7 +766,7 @@ function [magnitudes_db, phases] = calculate_full_fft(...
         end_index = steady_start + available_periods * period_samples - 1;
 
         if end_index > max_index
-            fprintf('    Warning (compare) CH%d: end_index (%d) > data length (%d)\n', ...
+            vprintf(verbose_level, 3, '    Warning (compare) CH%d: end_index (%d) > data length (%d)\n', ...
                     ch, end_index, max_index);
             end_index = max_index;
         end
@@ -750,7 +792,7 @@ function [magnitudes_db, phases] = calculate_full_fft(...
         % Validate frequency bin
         actual_freq = (target_bin_full - 1) * freq_res;
         if abs(actual_freq - excite_freq) > 0.01
-            fprintf('    Warning (compare) CH%d: Freq mismatch - target %.2f Hz, actual %.2f Hz\n', ...
+            vprintf(verbose_level, 3, '    Warning (compare) CH%d: Freq mismatch - target %.2f Hz, actual %.2f Hz\n', ...
                     ch, excite_freq, actual_freq);
         end
 
@@ -770,12 +812,13 @@ end
 %  5.4 DATA NORMALIZATION & PROCESSING
 %  ------------------------------------------------------------------------
 
-function magnitudes_normalized = normalize_magnitudes(magnitudes_db, frequencies)
+function magnitudes_normalized = normalize_magnitudes(magnitudes_db, frequencies, verbose_level)
 % NORMALIZE_MAGNITUDES Normalize magnitude data to lowest frequency
 %
 % Input:
 %   magnitudes_db - Magnitude in dB (6 x N)
 %   frequencies - Frequency vector (1 x N)
+%   verbose_level - Verbosity level (0-3)
 %
 % Output:
 %   magnitudes_normalized - Normalized magnitude in dB (6 x N)
@@ -790,7 +833,7 @@ function magnitudes_normalized = normalize_magnitudes(magnitudes_db, frequencies
 
     magnitudes_normalized = zeros(size(magnitudes_db));
 
-    fprintf('Normalization reference: %.2f Hz\n', frequencies(min_freq_idx));
+    vprintf(verbose_level, 3, 'Normalization reference: %.2f Hz\n', frequencies(min_freq_idx));
 
     % Normalize each channel
     for ch = 1:6
@@ -799,15 +842,15 @@ function magnitudes_normalized = normalize_magnitudes(magnitudes_db, frequencies
         if isfinite(reference_value)
             % Normalize: subtract lowest frequency value
             magnitudes_normalized(ch, :) = magnitudes_db(ch, :) - reference_value;
-            fprintf('  CH%d: Reference = %.2f dB\n', ch, reference_value);
+            vprintf(verbose_level, 3, '  CH%d: Reference = %.2f dB\n', ch, reference_value);
         else
             % Keep original if reference is invalid
             magnitudes_normalized(ch, :) = magnitudes_db(ch, :);
-            fprintf('  CH%d: Invalid reference, keeping original data\n', ch);
+            vprintf(verbose_level, 2, '  CH%d: Invalid reference, keeping original data\n', ch);
         end
     end
 
-    fprintf('Normalization complete! All channels referenced to 0 dB at lowest frequency\n');
+    vprintf(verbose_level, 3, 'Normalization complete! All channels referenced to 0 dB at lowest frequency\n');
 end
 
 
@@ -817,7 +860,7 @@ end
 
 function phases_processed = plot_bode_results(frequencies, magnitudes_db, phases, ...
     colors, original_magnitudes_db, excitation_channels, display_channels, ...
-    model_wn_squared, model_two_zeta_wn)
+    model_wn_squared, model_two_zeta_wn, verbose_level)
 % PLOT_BODE_RESULTS Generate Bode magnitude and phase plots
 %
 % Input:
@@ -830,6 +873,7 @@ function phases_processed = plot_bode_results(frequencies, magnitudes_db, phases
 %   display_channels - Channels to display
 %   model_wn_squared - Model natural frequency squared
 %   model_two_zeta_wn - Model damping parameter
+%   verbose_level - Verbosity level (0-3)
 %
 % Output:
 %   phases_processed - Phase with 180° correction applied (6 x N)
@@ -978,9 +1022,9 @@ function phases_processed = plot_bode_results(frequencies, magnitudes_db, phases
     ax.Box = 'on';
     ax.BoxStyle = 'full';
 
-    fprintf('Bode plots completed\n');
-    fprintf('Frequency range: %.2f - %.2f Hz\n', min(frequencies), max(frequencies));
-    fprintf('Frequency points: %d\n', length(frequencies));
+    vprintf(verbose_level, 2, 'Bode plots completed\n');
+    vprintf(verbose_level, 3, 'Frequency range: %.2f - %.2f Hz\n', min(frequencies), max(frequencies));
+    vprintf(verbose_level, 3, 'Frequency points: %d\n', length(frequencies));
 end
 
 
@@ -1268,7 +1312,7 @@ end
 %  5.6 FILE I/O
 %  ------------------------------------------------------------------------
 
-function save_bode_data_to_file(filename, frequencies, magnitudes_linear, phases, phases_processed)
+function save_bode_data_to_file(filename, frequencies, magnitudes_linear, phases, phases_processed, verbose_level)
 % SAVE_BODE_DATA_TO_FILE Save Bode data to .m file (P1.m format)
 %
 % Input:
@@ -1277,6 +1321,7 @@ function save_bode_data_to_file(filename, frequencies, magnitudes_linear, phases
 %   magnitudes_linear - Linear magnitude (6 x N)
 %   phases - Original phase in degrees (6 x N)
 %   phases_processed - Processed phase in degrees (6 x N)
+%   verbose_level - Verbosity level (0-3)
 
     % Open file for writing
     fid = fopen(filename, 'w');
@@ -1382,7 +1427,7 @@ function save_bode_data_to_file(filename, frequencies, magnitudes_linear, phases
         fprintf(fid, '%%    figure; semilogx(frequencies, phases_processed''); legend(''P1'',''P2'',''P3'',''P4'',''P5'',''P6'');\n');
 
         fclose(fid);
-        fprintf('    File saved successfully: %s\n', filename);
+        vprintf(verbose_level, 3, '    File saved successfully: %s\n', filename);
 
     catch ME
         fclose(fid);
