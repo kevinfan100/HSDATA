@@ -50,6 +50,8 @@ DISPLAY_CHANNELS = [1,2,3,4,5,6];            % Channels to display in Bode plot
 PLOT_STEADY_STATE = true;                    % Enable steady-state waveform overlay plot
 PLOT_CHANNEL = [1];                          % Channels for overlay: 0=all, 1-6=specific, [3,5]=multiple
 PLOT_FREQUENCY_LIST = [0.1];                 % Specific frequencies to plot (empty=all frequencies)
+PLOT_FFT_SPECTRUM = false;                   % Enable FFT spectrum visualization
+PLOT_FFT_FREQUENCY_LIST = [];                % Specific frequencies to plot FFT (empty=all frequencies)
 
 % --- Model Parameters (for theoretical Bode curve) ---
 MODEL_WN_SQUARED = 1.4848e7;         % Natural frequency squared (rad^2/s^2)
@@ -146,6 +148,12 @@ for i = 1:length(csv_files)
         [current_magnitudes_db, current_phases] = perform_fft_analysis(...
             vm_clean, da_volt, steady_info, excite_ch, excite_freq, ...
             SAMPLING_RATE, FFT_MODE, MIN_DA_THRESHOLD, COMPARE_FFT_METHODS);
+
+        % Plot FFT spectrum (if enabled)
+        if PLOT_FFT_SPECTRUM && should_plot_frequency(excite_freq, PLOT_FFT_FREQUENCY_LIST)
+            plot_fft_spectrum(vm_clean, da_volt, steady_info, excite_ch, ...
+                excite_freq, SAMPLING_RATE);
+        end
 
         % --- Step 3.6: Store results ---
         frequencies = [frequencies, excite_freq];
@@ -1142,6 +1150,117 @@ function should_plot = should_plot_frequency(freq, freq_list)
         tolerance = 0.1;  % Hz
         should_plot = any(abs(freq - freq_list(:)) < tolerance);
     end
+end
+
+
+function plot_fft_spectrum(vm_clean, da_volt, steady_info, excite_ch, excite_freq, sampling_rate)
+% PLOT_FFT_SPECTRUM Visualize FFT spectrum for DA excitation and VM responses
+%
+% Input:
+%   vm_clean - Cleaned VM data (6 x N)
+%   da_volt - DA voltage data (6 x N)
+%   steady_info - Steady-state information structure
+%   excite_ch - Excitation channel index (1-6)
+%   excite_freq - Excitation frequency (Hz)
+%   sampling_rate - Sampling rate (Hz)
+
+    % Extract steady-state parameters
+    steady_start = steady_info.index;
+    period_samples = steady_info.period_samples;
+    available_length = size(vm_clean, 2) - steady_start + 1;
+    available_periods = floor(available_length / period_samples);
+
+    if available_periods < 1
+        fprintf('    Warning: Insufficient data for FFT spectrum plot\n');
+        return;
+    end
+
+    % Extract steady-state data (multiple periods)
+    max_index = size(vm_clean, 2);
+    end_index = min(steady_start + available_periods * period_samples - 1, max_index);
+
+    da_signal = da_volt(excite_ch, steady_start:end_index);
+    vm_signals = vm_clean(:, steady_start:end_index);
+
+    % Perform FFT
+    N = length(da_signal);
+    freq_axis = (0:N-1) * sampling_rate / N;
+
+    % Only plot positive frequencies up to Nyquist
+    nyquist_idx = floor(N/2);
+    freq_plot = freq_axis(1:nyquist_idx);
+
+    % Calculate FFT for DA
+    da_fft = fft(da_signal);
+    da_magnitude = abs(da_fft(1:nyquist_idx)) * 2 / N;  % Single-sided spectrum
+
+    % Calculate FFT for all VM channels
+    vm_fft = zeros(6, nyquist_idx);
+    for ch = 1:6
+        fft_result = fft(vm_signals(ch, :));
+        vm_fft(ch, :) = abs(fft_result(1:nyquist_idx)) * 2 / N;
+    end
+
+    % Create figure
+    figure('Name', sprintf('FFT Spectrum @ %.1f Hz', excite_freq), ...
+           'Position', [100, 100, 1400, 900]);
+
+    % Define colors for VM channels
+    vm_colors = ['k','b','g','r','m','c'];
+
+    %% Top panel: DA spectrum
+    subplot(3, 3, [1, 2, 3]);
+    hold on;
+
+    % Plot DA spectrum
+    plot(freq_plot, da_magnitude, 'LineWidth', 2, 'Color', [0.2, 0.2, 0.8]);
+
+    % Mark excitation frequency
+    [~, target_idx] = min(abs(freq_plot - excite_freq));
+    plot(excite_freq, da_magnitude(target_idx), 'ro', ...
+         'MarkerSize', 12, 'MarkerFaceColor', 'r', ...
+         'DisplayName', sprintf('%.1f Hz', excite_freq));
+
+    xlabel('Frequency (Hz)', 'FontWeight', 'bold', 'FontSize', 14);
+    ylabel('Magnitude (V)', 'FontWeight', 'bold', 'FontSize', 14);
+    title(sprintf('DA Channel %d Spectrum (Excitation)', excite_ch), ...
+          'FontWeight', 'bold', 'FontSize', 16);
+
+    % Set appropriate x-axis limits
+    max_freq_plot = min(excite_freq * 10, max(freq_plot));
+    xlim([0, max_freq_plot]);
+
+    grid on;
+    legend('Location', 'northeast', 'FontSize', 12);
+    set(gca, 'FontWeight', 'bold', 'FontSize', 12, 'LineWidth', 1.5);
+
+    %% Bottom panels: VM spectra (2x3 grid)
+    for ch = 1:6
+        subplot(3, 3, 3 + ch);
+        hold on;
+
+        % Plot VM spectrum
+        plot(freq_plot, vm_fft(ch, :), 'LineWidth', 1.5, 'Color', vm_colors(ch));
+
+        % Mark excitation frequency
+        plot(excite_freq, vm_fft(ch, target_idx), 'ro', ...
+             'MarkerSize', 10, 'MarkerFaceColor', 'r');
+
+        xlabel('Frequency (Hz)', 'FontWeight', 'bold', 'FontSize', 12);
+        ylabel('Magnitude (V)', 'FontWeight', 'bold', 'FontSize', 12);
+        title(sprintf('VM Channel %d', ch), 'FontWeight', 'bold', 'FontSize', 14);
+
+        xlim([0, max_freq_plot]);
+        grid on;
+        set(gca, 'FontWeight', 'bold', 'FontSize', 10, 'LineWidth', 1.5);
+    end
+
+    % Overall title
+    sgtitle(sprintf('FFT Spectrum Analysis @ %.1f Hz (DA%d excitation, %d periods)', ...
+            excite_freq, excite_ch, available_periods), ...
+            'FontWeight', 'bold', 'FontSize', 18);
+
+    fprintf('    FFT spectrum plot generated\n');
 end
 
 
